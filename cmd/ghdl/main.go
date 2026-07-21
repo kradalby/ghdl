@@ -127,7 +127,10 @@ func serve(ctx context.Context, log *slog.Logger, cfg *config) error {
 		LocalAddr:       *cfg.localAddr,
 		AuthKey:         os.Getenv("TS_AUTHKEY"),
 		EnableTailscale: !*cfg.dev,
-	}, web.WithLogger(log))
+	}, web.WithLogger(log),
+		// tsnet defaults its state to $HOME/.config, which is /var/empty under
+		// the hardened unit; keep it in the writable state directory instead.
+		web.WithTailscaleStateDir(filepath.Join(*cfg.stateDir, "tsnet")))
 	if err != nil {
 		return fmt.Errorf("build server: %w", err)
 	}
