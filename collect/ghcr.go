@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -35,7 +36,16 @@ func NewGHCR(repos []string) *GHCR {
 // Source implements Collector.
 func (g *GHCR) Source() string { return "ghcr" }
 
-// Collect fetches the total and per-version pull counts for each package.
+// Collect fetches the repo total, per-version, and per-version-per-arch pull
+// counts for each package.
+//
+// The web UI gives download counts but no architecture; the container registry
+// gives the arch of each sub-manifest but no counts. So we join them: a tagged
+// version is a multi-arch index whose sub-manifests appear on the untagged
+// versions page (with counts) and in the registry index manifest (with the
+// os/arch). The per-arch count is the sub-manifest's own download count — a
+// good proxy for per-arch pulls, since a `docker pull` fetches the index plus
+// the puller's arch sub-manifest.
 func (g *GHCR) Collect(ctx context.Context) ([]db.Observation, error) {
 	var out []db.Observation
 
@@ -55,34 +65,39 @@ func (g *GHCR) Collect(ctx context.Context) ([]db.Observation, error) {
 		}
 		out = append(out, db.Observation{Source: g.Source(), Repo: repo, Count: total})
 
-		// The versions page is paginated (~50 per page); walk every page so
-		// historic versions are captured, not just the most recent. Each series
-		// is keyed by digest (unique per version) with a major.minor.patch
-		// release label, so re-pushes of a tag sum under the same version in the
-		// graph rather than colliding into one flip-flopping counter.
-		seen := map[string]bool{}
-		for page := 1; page <= maxVersionPages; page++ {
-			versDoc, err := getHTML(ctx, g.hc, ghcrVersionsURL(owner, pkg, page))
+		tagged, err := g.scrapeVersions(ctx, owner, pkg, "tagged")
+		if err != nil {
+			return nil, fmt.Errorf("ghcr %s tagged: %w", repo, err)
+		}
+		untagged, err := g.scrapeVersions(ctx, owner, pkg, "untagged")
+		if err != nil {
+			return nil, fmt.Errorf("ghcr %s untagged: %w", repo, err)
+		}
+		subCount := make(map[string]int64, len(untagged))
+		for _, u := range untagged {
+			subCount[u.Digest] = u.Count
+		}
+
+		token, err := g.registryToken(ctx, owner, pkg)
+		if err != nil {
+			return nil, fmt.Errorf("ghcr %s registry token: %w", repo, err)
+		}
+
+		for _, v := range tagged {
+			subs, err := g.indexPlatforms(ctx, token, owner, pkg, v.Digest)
 			if err != nil {
-				return nil, fmt.Errorf("ghcr %s versions page %d: %w", repo, page, err)
+				return nil, fmt.Errorf("ghcr %s manifest %s: %w", repo, v.Label, err)
 			}
-			versions := parseGHCRVersions(versDoc)
-			if len(versions) == 0 {
-				break // past the last page
-			}
-			// Stop if a page repeats what we've already seen (defensive against a
-			// last-page-clamps-to-last-page server behaviour).
-			fresh := false
-			for _, v := range versions {
-				if seen[v.Digest] {
-					continue
-				}
-				seen[v.Digest] = true
-				fresh = true
+			if len(subs) == 0 {
+				// Single-arch (or non-index) version: record the total without arch.
 				out = append(out, db.Observation{Source: g.Source(), Repo: repo, Release: v.Label, Asset: v.Digest, Count: v.Count})
+				continue
 			}
-			if !fresh {
-				break
+			for _, s := range subs {
+				out = append(out, db.Observation{
+					Source: g.Source(), Repo: repo, Release: v.Label,
+					OS: s.OS, Arch: s.Arch, Asset: s.Digest, Count: subCount[s.Digest],
+				})
 			}
 		}
 	}
@@ -94,14 +109,47 @@ func (g *GHCR) Collect(ctx context.Context) ([]db.Observation, error) {
 // that never returns an empty page can't loop forever.
 const maxVersionPages = 200
 
+// scrapeVersions walks every page of the tagged/untagged versions list,
+// deduplicating by digest.
+func (g *GHCR) scrapeVersions(ctx context.Context, owner, pkg, versionType string) ([]ghcrVersion, error) {
+	var out []ghcrVersion
+	seen := map[string]bool{}
+
+	for page := 1; page <= maxVersionPages; page++ {
+		doc, err := getHTML(ctx, g.hc, ghcrVersionsURL(owner, pkg, versionType, page))
+		if err != nil {
+			return nil, fmt.Errorf("page %d: %w", page, err)
+		}
+		versions := parseGHCRVersions(doc)
+		if len(versions) == 0 {
+			break // past the last page
+		}
+		// Stop when a page repeats what we've seen (last-page-clamps behaviour).
+		fresh := false
+		for _, v := range versions {
+			if v.Digest == "" || seen[v.Digest] {
+				continue
+			}
+			seen[v.Digest] = true
+			fresh = true
+			out = append(out, v)
+		}
+		if !fresh {
+			break
+		}
+	}
+
+	return out, nil
+}
+
 func ghcrPackageURL(owner, pkg string) string {
 	return fmt.Sprintf("https://github.com/%s/%s/pkgs/container/%s", owner, pkg, pkg)
 }
 
-func ghcrVersionsURL(owner, pkg string, page int) string {
+func ghcrVersionsURL(owner, pkg, versionType string, page int) string {
 	return fmt.Sprintf(
-		"https://github.com/%s/%s/pkgs/container/%s/versions?filters%%5Bversion_type%%5D=tagged&page=%d",
-		owner, pkg, pkg, page,
+		"https://github.com/%s/%s/pkgs/container/%s/versions?filters%%5Bversion_type%%5D=%s&page=%d",
+		owner, pkg, pkg, versionType, page,
 	)
 }
 
@@ -199,4 +247,97 @@ func versionDownloads(row *goquery.Selection) (int64, bool) {
 		return false
 	})
 	return count, found
+}
+
+// --- container registry (per-arch) ---
+
+const ghcrRegistry = "https://ghcr.io"
+
+// registryToken fetches an anonymous pull token for the package's registry repo.
+func (g *GHCR) registryToken(ctx context.Context, owner, pkg string) (string, error) {
+	url := fmt.Sprintf("%s/token?service=ghcr.io&scope=repository:%s/%s:pull", ghcrRegistry, owner, pkg)
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := getJSON(ctx, g.hc, url, &body); err != nil {
+		return "", err
+	}
+	return body.Token, nil
+}
+
+type subManifest struct {
+	Digest string
+	OS     string
+	Arch   string
+}
+
+// indexPlatforms fetches a manifest by reference and, when it is a multi-arch
+// index, returns its sub-manifests with normalised os/arch. A single-arch image
+// manifest returns nil.
+func (g *GHCR) indexPlatforms(ctx context.Context, token, owner, pkg, ref string) ([]subManifest, error) {
+	url := fmt.Sprintf("%s/v2/%s/%s/manifests/%s", ghcrRegistry, owner, pkg, ref)
+	req, err := newRequest(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", strings.Join([]string{
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", "))
+
+	resp, err := g.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
+	}
+
+	var idx struct {
+		Manifests []struct {
+			Digest   string `json:"digest"`
+			Platform struct {
+				OS           string `json:"os"`
+				Architecture string `json:"architecture"`
+				Variant      string `json:"variant"`
+			} `json:"platform"`
+		} `json:"manifests"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&idx); err != nil {
+		return nil, err
+	}
+
+	var out []subManifest
+	for _, m := range idx.Manifests {
+		// Skip attestation/provenance entries (os/arch "unknown").
+		if m.Platform.OS == "" || m.Platform.OS == "unknown" || m.Platform.Architecture == "unknown" {
+			continue
+		}
+		out = append(out, subManifest{
+			Digest: m.Digest,
+			OS:     m.Platform.OS,
+			Arch:   normArch(m.Platform.Architecture, m.Platform.Variant),
+		})
+	}
+	return out, nil
+}
+
+// normArch maps a registry architecture+variant to the same labels the release
+// filename parser uses, so "by=arch" is consistent across sources.
+func normArch(arch, variant string) string {
+	if arch == "arm" {
+		switch variant {
+		case "v7":
+			return "armv7"
+		case "v6":
+			return "armv6"
+		case "v5":
+			return "armv5"
+		}
+	}
+	return arch // amd64, arm64, 386, …
 }
