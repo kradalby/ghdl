@@ -79,7 +79,7 @@ func TestTimeSeriesAggregation(t *testing.T) {
 	require.NoError(t, must(d.Save(ctx, 200, []Observation{mk("a", 10), mk("b", 8)}))) // only b changes
 	require.NoError(t, must(d.Save(ctx, 300, []Observation{mk("a", 12), mk("b", 8)}))) // only a changes
 
-	pts, err := d.TimeSeries(ctx, "github_release", "r", "arch", 0, 1000)
+	pts, err := d.TimeSeries(ctx, Filter{Source: "github_release", Repo: "r"}, "arch", 0, 1000)
 	require.NoError(t, err)
 
 	// All series share arch=arm64 → one line. Sums by carried value:
@@ -94,6 +94,41 @@ func TestTimeSeriesAggregation(t *testing.T) {
 	require.Equal(t, int64(15), got[100])
 	require.Equal(t, int64(18), got[200])
 	require.Equal(t, int64(20), got[300])
+}
+
+// TestFilterDrilldown checks that a pinned dimension (release) restricts the
+// series before grouping by another (arch) — the drill-down path.
+func TestFilterDrilldown(t *testing.T) {
+	t.Parallel()
+	d := openTest(t)
+	ctx := context.Background()
+
+	obs := []Observation{
+		{Source: "github_release", Repo: "r", Release: "1.0.0", Asset: "a", OS: "linux", Arch: "amd64", Format: "deb", Count: 100},
+		{Source: "github_release", Repo: "r", Release: "1.0.0", Asset: "b", OS: "linux", Arch: "arm64", Format: "deb", Count: 40},
+		{Source: "github_release", Repo: "r", Release: "0.9.0", Asset: "c", OS: "linux", Arch: "amd64", Format: "deb", Count: 999},
+	}
+	require.NoError(t, must(d.Save(ctx, 100, obs)))
+
+	// Pin release=1.0.0, split by arch → only 1.0.0's two arches, not 0.9.0.
+	pts, err := d.TimeSeries(ctx, Filter{Source: "github_release", Repo: "r", Release: "1.0.0"}, "arch", 0, 1000)
+	require.NoError(t, err)
+	got := map[string]int64{}
+	for _, p := range pts {
+		got[p.Label] = p.Count
+	}
+	require.Equal(t, int64(100), got["amd64"])
+	require.Equal(t, int64(40), got["arm64"])
+	require.NotContains(t, got, "", "0.9.0's amd64 (999) must be excluded")
+
+	// Values(release) lists both versions; scoped by arch=arm64 lists only 1.0.0.
+	rels, err := d.Values(ctx, Filter{Source: "github_release", Repo: "r"}, "release")
+	require.NoError(t, err)
+	require.Equal(t, []string{"0.9.0", "1.0.0"}, rels)
+
+	arm, err := d.Values(ctx, Filter{Source: "github_release", Repo: "r", Arch: "arm64"}, "release")
+	require.NoError(t, err)
+	require.Equal(t, []string{"1.0.0"}, arm)
 }
 
 func must(_ int, err error) error { return err }
