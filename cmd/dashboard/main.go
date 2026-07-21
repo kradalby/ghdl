@@ -28,14 +28,17 @@ func main() {
 	writeFile(filepath.Join(*out, "ghdl-service.json"), service)
 }
 
-func writeFile(path string, d dashboard.Dashboard) {
+// dashboard.Dashboard is the v1 model, kept deliberately for portable
+// file-based provisioning (see dashboard.go), hence the staticcheck waivers.
+
+func writeFile(path string, d dashboard.Dashboard) { //nolint:staticcheck // v1 model
 	f, err := os.Create(path)
 	check(err, "create "+path)
 	defer f.Close()
 	emit(f, d)
 }
 
-func emit(w *os.File, d dashboard.Dashboard) {
+func emit(w *os.File, d dashboard.Dashboard) { //nolint:staticcheck // v1 model
 	b, err := json.MarshalIndent(d, "", "  ")
 	check(err, "marshal dashboard")
 	_, err = w.Write(append(b, '\n'))

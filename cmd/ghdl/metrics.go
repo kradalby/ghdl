@@ -25,7 +25,7 @@ var (
 	})
 
 	seriesTotal = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "ghdl_series_total",
+		Name: "ghdl_series",
 		Help: "Number of distinct series tracked in the database.",
 	})
 )
