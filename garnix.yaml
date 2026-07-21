@@ -1,0 +1,9 @@
+# CI is garnix: it builds every check, package and dev shell.
+#
+# govulncheck deliberately has no job: it fetches the live vulnerability
+# database, so it cannot be a pure derivation. Run it from the dev shell.
+builds:
+  include:
+    - "checks.x86_64-linux.*"
+    - "packages.x86_64-linux.*"
+    - "devShells.x86_64-linux.*"
