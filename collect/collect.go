@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/cenkalti/backoff/v5"
 
 	"github.com/kradalby/ghdl/db"
 )
@@ -72,22 +73,31 @@ func getJSON(ctx context.Context, hc *http.Client, url string, v any) error {
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
+// getHTML fetches and parses an HTML page, retrying on transient failures.
+// GitHub's package pages 502 intermittently, and pagination multiplies the
+// number of requests, so a single blip must not fail the whole collection. 5xx
+// and network errors are retried; 4xx are permanent.
 func getHTML(ctx context.Context, hc *http.Client, url string) (*goquery.Document, error) {
-	req, err := newRequest(ctx, url)
-	if err != nil {
-		return nil, err
-	}
+	return backoff.Retry(ctx, func() (*goquery.Document, error) {
+		req, err := newRequest(ctx, url)
+		if err != nil {
+			return nil, backoff.Permanent(err)
+		}
 
-	resp, err := hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+		resp, err := hc.Do(req)
+		if err != nil {
+			return nil, err // network error — retry
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
-	}
-	return goquery.NewDocumentFromReader(resp.Body)
+		switch {
+		case resp.StatusCode >= 500:
+			return nil, fmt.Errorf("GET %s: %s", url, resp.Status) // transient — retry
+		case resp.StatusCode != http.StatusOK:
+			return nil, backoff.Permanent(fmt.Errorf("GET %s: %s", url, resp.Status))
+		}
+		return goquery.NewDocumentFromReader(resp.Body)
+	}, backoff.WithBackOff(backoff.NewExponentialBackOff()), backoff.WithMaxTries(8))
 }
 
 // docFromReader is a small seam so the HTML parsers can be unit-tested against
