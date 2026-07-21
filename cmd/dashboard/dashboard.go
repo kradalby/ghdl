@@ -101,25 +101,68 @@ func infinityTarget(refID, url string) *variants.UnknownDataqueryBuilder {
 	})
 }
 
-// tsURL builds a /api/timeseries URL with Grafana's time-range macros (seconds).
-func tsURL(source, repo, by string) string {
+// filters is the drill-down selection pinned on a panel. Empty fields (the "All"
+// variable value) match everything.
+type filters struct {
+	release, os, arch, format string
+}
+
+// tsURL builds a /api/timeseries URL with the pinned filters and Grafana's
+// time-range macros. Params are emitted in a fixed order so the generated JSON
+// is deterministic.
+func tsURL(source, repo, by string, f filters) string {
 	return "/api/timeseries?source=" + source + "&repo=" + repo + "&by=" + by +
+		param("release", f.release) + param("os", f.os) + param("arch", f.arch) + param("format", f.format) +
 		"&from=${__from:date:seconds}&to=${__to:date:seconds}"
 }
 
-func infinityTimeseries(title, desc, source, repo, by string) *timeseries.PanelBuilder {
+// param renders a filter query param, or "" when the value is empty (All).
+func param(key, val string) string {
+	if val == "" {
+		return ""
+	}
+	return "&" + key + "=" + val
+}
+
+func infinityTimeseries(title, desc, source, repo, by string, f filters) *timeseries.PanelBuilder {
 	return timeseries.NewPanelBuilder().
 		Title(title).Description(desc).Unit(units.Short).
 		Datasource(infinityDS()).Span(12).Height(8).FillOpacity(10).
 		Legend(legend(true)).
-		WithTarget(infinityTarget("A", tsURL(source, repo, by)))
+		WithTarget(infinityTarget("A", tsURL(source, repo, by, f)))
 }
 
-// buildDataDashboard assembles the downloads-over-time dashboard. Build()
-// schema-validates, so a malformed panel fails the generating derivation.
+// valuesVar builds an "All"-able template variable populated from /api/values,
+// so the viewer can pin a dimension and the panels filter by it.
+func valuesVar(name, label, field, source, repo string) *dashboard.QueryVariableBuilder {
+	return dashboard.NewQueryVariableBuilder(name).
+		Label(label).
+		Datasource(infinityDS()).
+		Query(dashboard.StringOrMap{Map: map[string]any{
+			"refId":         "variable",
+			"datasource":    map[string]any{"type": "yesoreyeram-infinity-datasource", "uid": "${" + infinityVar + "}"},
+			"type":          "json",
+			"source":        "url",
+			"format":        "table",
+			"url":           "/api/values?field=" + field + "&source=" + source + "&repo=" + repo,
+			"url_options":   map[string]any{"method": "GET"},
+			"root_selector": "",
+			"columns":       []map[string]any{{"selector": "value", "text": "value", "type": "string"}},
+		}}).
+		Refresh(dashboard.VariableRefreshOnDashboardLoad).
+		Sort(dashboard.VariableSortAlphabeticalDesc).
+		IncludeAll(true).AllValue("").Multi(false)
+}
+
+// buildDataDashboard assembles the downloads-over-time dashboard with drill-down
+// on version × packaging × arch. Build() schema-validates, so a malformed panel
+// fails the generating derivation.
 //
 //nolint:staticcheck // v1 model required for portable file-based provisioning
 func buildDataDashboard() (dashboard.Dashboard, error) {
+	// The variable interpolations pinned on the filtered panels.
+	v, a, fmtV := "${version}", "${arch}", "${format}"
+
 	return dashboard.NewDashboardBuilder("ghdl — downloads").
 		Uid("ghdl-downloads").
 		Tags([]string{"ghdl", "downloads", "generated"}).
@@ -128,29 +171,40 @@ func buildDataDashboard() (dashboard.Dashboard, error) {
 		Timezone(common.TimeZoneBrowser).
 		WithVariable(dashboard.NewDatasourceVariableBuilder(infinityVar).
 			Label("ghdl API").Type("yesoreyeram-infinity-datasource")).
-		WithRow(dashboard.NewRowBuilder("GitHub release downloads")).
+		WithVariable(valuesVar("version", "Version (release/tag)", "release", "github_release", ghRepo)).
+		WithVariable(valuesVar("arch", "Arch", "arch", "github_release", ghRepo)).
+		WithVariable(valuesVar("format", "Packaging", "format", "github_release", ghRepo)).
+
+		// GitHub releases — each panel pins two dimensions (from the variables)
+		// and splits by the third, so version × packaging × arch drill-down.
+		WithRow(dashboard.NewRowBuilder("GitHub releases — drill down with the Version / Arch / Packaging variables")).
 		WithPanel(infinityTimeseries("Downloads by arch",
-			"Cumulative GitHub release-asset downloads, summed by CPU architecture.",
-			"github_release", ghRepo, "arch")).
+			"GitHub release-asset downloads split by CPU arch, filtered by the pinned Version and Packaging.",
+			"github_release", ghRepo, "arch", filters{release: v, format: fmtV})).
+		WithPanel(infinityTimeseries("Downloads by packaging",
+			"Split by packaging (deb/rpm/tar.gz/zip/bin), filtered by the pinned Version and Arch.",
+			"github_release", ghRepo, "format", filters{release: v, arch: a})).
+		WithPanel(infinityTimeseries("Downloads by version",
+			"Split by release version, filtered by the pinned Arch and Packaging.",
+			"github_release", ghRepo, "release", filters{arch: a, format: fmtV})).
 		WithPanel(infinityTimeseries("Downloads by OS",
-			"Cumulative GitHub release-asset downloads, summed by operating system.",
-			"github_release", ghRepo, "os")).
-		WithPanel(infinityTimeseries("Downloads by packaging format",
-			"Cumulative downloads by packaging: deb, rpm, tar.gz, zip or raw binary.",
-			"github_release", ghRepo, "format")).
-		WithPanel(infinityTimeseries("Downloads by release",
-			"Cumulative downloads per release tag.",
-			"github_release", ghRepo, "release")).
-		WithRow(dashboard.NewRowBuilder("Container pulls")).
-		WithPanel(infinityTimeseries("Docker Hub pulls (repo total)",
-			"Docker Hub only exposes a repo-wide pull_count — no per-tag breakdown.",
-			"dockerhub", dockerRepo, "none")).
-		WithPanel(infinityTimeseries("GHCR pulls (repo total)",
-			"Total GHCR container pulls, scraped from the package page.",
-			"ghcr", ghRepo, "none")).
-		WithPanel(infinityTimeseries("GHCR pulls by version",
-			"Per-version GHCR container pulls, scraped from the versions page.",
-			"ghcr", ghRepo, "release")).
+			"Split by operating system, filtered by the pinned Version.",
+			"github_release", ghRepo, "os", filters{release: v})).
+
+		// GHCR containers — per-version and per-arch (from the registry index).
+		WithRow(dashboard.NewRowBuilder("GHCR containers")).
+		WithPanel(infinityTimeseries("Pulls by arch",
+			"Per-arch container pulls (sub-manifest downloads), filtered by the pinned Version.",
+			"ghcr", ghRepo, "arch", filters{release: v})).
+		WithPanel(infinityTimeseries("Pulls by version",
+			"Per-version container pulls, filtered by the pinned Arch.",
+			"ghcr", ghRepo, "release", filters{arch: a})).
+
+		// Docker Hub — repo total only (the API exposes nothing finer).
+		WithRow(dashboard.NewRowBuilder("Docker Hub (repo total only)")).
+		WithPanel(infinityTimeseries("Docker Hub pulls",
+			"Docker Hub exposes only a repo-wide pull_count — no per-tag or per-arch breakdown.",
+			"dockerhub", dockerRepo, "none", filters{})).
 		Build()
 }
 
