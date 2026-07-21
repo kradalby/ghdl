@@ -37,6 +37,9 @@
           vendorHash = hashes.vendor.sri;
           goPkg = pkgs.go_1_26;
           subPackages = [ "cmd/ghdl" ];
+          # db/db.go embeds schema.sql via //go:embed; flake-checks' src filter
+          # whitelists .go files, so the embedded schema must be added explicitly.
+          extraSrc = [ ./db/schema.sql ];
         };
         # The dashboard generator is its own build so the Grafana Foundation SDK
         # stays out of the service binary. Its built output is captured as a
