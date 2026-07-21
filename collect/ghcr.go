@@ -200,7 +200,7 @@ func parseGHCRVersions(doc *goquery.Document) []ghcrVersion {
 			}
 		})
 
-		digest, _ := row.Find("[value^='sha256:']").Attr("value")
+		digest := rowDigest(row)
 		if len(tags) == 0 && digest == "" {
 			return
 		}
@@ -230,6 +230,28 @@ func versionLabel(tags []string) string {
 		}
 	}
 	return "untagged"
+}
+
+// digestText matches a full sha256 digest (as rendered in link text on the
+// untagged versions page).
+var digestText = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// rowDigest extracts a version's sha256 digest. The tagged page carries it in a
+// clipboard `value="sha256:…"` attribute; the untagged page renders it as the
+// text of the version link. Try both.
+func rowDigest(row *goquery.Selection) string {
+	if d, ok := row.Find("[value^='sha256:']").Attr("value"); ok {
+		return d
+	}
+	var digest string
+	row.Find("a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
+		if t := strings.TrimSpace(a.Text()); digestText.MatchString(t) {
+			digest = t
+			return false
+		}
+		return true
+	})
+	return digest
 }
 
 // versionDownloads pulls the count out of a version row's "Version downloads"

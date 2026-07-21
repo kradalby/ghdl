@@ -61,6 +61,26 @@ func TestParseNum(t *testing.T) {
 	require.Equal(t, int64(0), parseNum(""))
 }
 
+// TestParseGHCRUntagged guards the untagged page, which renders the digest as
+// link text (not a value= attribute like the tagged page) — the per-arch join
+// depends on extracting it.
+func TestParseGHCRUntagged(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.Open("testdata/ghcr_untagged.html")
+	require.NoError(t, err)
+	defer f.Close()
+
+	doc, err := docFromReader(f)
+	require.NoError(t, err)
+
+	versions := parseGHCRVersions(doc)
+	require.Len(t, versions, 50)
+	for _, v := range versions {
+		require.Regexp(t, `^sha256:[0-9a-f]{64}$`, v.Digest, "untagged digest from link text")
+	}
+}
+
 func TestNormArch(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, "amd64", normArch("amd64", ""))
