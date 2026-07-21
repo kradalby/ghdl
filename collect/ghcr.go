@@ -53,24 +53,51 @@ func (g *GHCR) Collect(ctx context.Context) ([]db.Observation, error) {
 		}
 		out = append(out, db.Observation{Source: g.Source(), Repo: repo, Count: total})
 
-		versDoc, err := getHTML(ctx, g.hc, ghcrVersionsURL(owner, pkg))
-		if err != nil {
-			return nil, fmt.Errorf("ghcr %s versions: %w", repo, err)
-		}
-		for _, v := range parseGHCRVersions(versDoc) {
-			out = append(out, db.Observation{Source: g.Source(), Repo: repo, Release: v.Label, Count: v.Count})
+		// The versions page is paginated (~50 per page); walk every page so
+		// historic versions are captured, not just the most recent.
+		seen := map[string]bool{}
+		for page := 1; page <= maxVersionPages; page++ {
+			versDoc, err := getHTML(ctx, g.hc, ghcrVersionsURL(owner, pkg, page))
+			if err != nil {
+				return nil, fmt.Errorf("ghcr %s versions page %d: %w", repo, page, err)
+			}
+			versions := parseGHCRVersions(versDoc)
+			if len(versions) == 0 {
+				break // past the last page
+			}
+			// Stop if a page repeats what we've already seen (defensive against a
+			// last-page-clamps-to-last-page server behaviour).
+			fresh := false
+			for _, v := range versions {
+				if seen[v.Label] {
+					continue
+				}
+				seen[v.Label] = true
+				fresh = true
+				out = append(out, db.Observation{Source: g.Source(), Repo: repo, Release: v.Label, Count: v.Count})
+			}
+			if !fresh {
+				break
+			}
 		}
 	}
 
 	return out, nil
 }
 
+// maxVersionPages caps the GHCR versions walk (~50 versions/page) so a server
+// that never returns an empty page can't loop forever.
+const maxVersionPages = 200
+
 func ghcrPackageURL(owner, pkg string) string {
 	return fmt.Sprintf("https://github.com/%s/%s/pkgs/container/%s", owner, pkg, pkg)
 }
 
-func ghcrVersionsURL(owner, pkg string) string {
-	return fmt.Sprintf("https://github.com/%s/%s/pkgs/container/%s/versions?filters%%5Bversion_type%%5D=tagged", owner, pkg, pkg)
+func ghcrVersionsURL(owner, pkg string, page int) string {
+	return fmt.Sprintf(
+		"https://github.com/%s/%s/pkgs/container/%s/versions?filters%%5Bversion_type%%5D=tagged&page=%d",
+		owner, pkg, pkg, page,
+	)
 }
 
 // parseGHCRTotal extracts the repo-wide "Total downloads" number, which renders
