@@ -131,4 +131,25 @@ func TestFilterDrilldown(t *testing.T) {
 	require.Equal(t, []string{"1.0.0"}, arm)
 }
 
+// TestOpenIgnoresLitestreamTables reproduces the deploy blocker: litestream
+// adds _litestream_seq/_litestream_lock to the db, and squibble must not treat
+// them as schema drift on the next open.
+func TestOpenIgnoresLitestreamTables(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ls.db")
+
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	_, err = d.sql.ExecContext(ctx, `CREATE TABLE _litestream_seq (id INTEGER PRIMARY KEY, seq INTEGER);
+CREATE TABLE _litestream_lock (id INTEGER);`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	// Reopen: squibble applies its digest check and must ignore the litestream tables.
+	d2, err := Open(ctx, path)
+	require.NoError(t, err, "squibble must ignore litestream tables")
+	require.NoError(t, d2.Close())
+}
+
 func must(_ int, err error) error { return err }

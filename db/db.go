@@ -25,8 +25,13 @@ var dbSchema string
 // schema is the squibble migration target. Updates is empty for v1; schema
 // changes append {Source, Target, Apply} rules whose digests chain to the
 // hash of schema.sql (see the squibble docs and sfiber for the pattern).
+//
+// IgnoreTables keeps litestream's bookkeeping tables out of the schema digest —
+// litestream (which replicates this db) creates them at runtime, and without
+// this squibble would see them as unexpected schema drift and refuse to open.
 var schema = &squibble.Schema{
-	Current: dbSchema,
+	Current:      dbSchema,
+	IgnoreTables: []string{"_litestream_seq", "_litestream_lock"},
 }
 
 // DB is the ghdl store.
