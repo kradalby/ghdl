@@ -61,6 +61,15 @@ func TestParseNum(t *testing.T) {
 	require.Equal(t, int64(0), parseNum(""))
 }
 
+func TestNormArch(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "amd64", normArch("amd64", ""))
+	require.Equal(t, "arm64", normArch("arm64", "v8"))
+	require.Equal(t, "armv7", normArch("arm", "v7"))
+	require.Equal(t, "armv6", normArch("arm", "v6"))
+	require.Equal(t, "386", normArch("386", ""))
+}
+
 func TestVersionLabel(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, "0.29.2", versionLabel([]string{"latest", "sha-8eea8948", "v0.29.2", "0.29.2", "v0.29", "v0"}))
