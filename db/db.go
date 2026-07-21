@@ -144,13 +144,27 @@ func (d *DB) CountSeries(ctx context.Context) (int64, error) {
 	return d.q.CountSeries(ctx)
 }
 
-// TimeSeries returns the download counts of the series matching source/repo,
+// Filter selects series by any combination of dimensions; an empty field
+// matches anything. It is the basis for drill-down (e.g. release="0.29.2" +
+// by="arch").
+type Filter struct {
+	Source, Repo, Release, OS, Arch, Format string
+}
+
+func (f Filter) matches(s dbsqlc.Series) bool {
+	return (f.Release == "" || s.Release == f.Release) &&
+		(f.OS == "" || s.Os == f.OS) &&
+		(f.Arch == "" || s.Arch == f.Arch) &&
+		(f.Format == "" || s.Format == f.Format)
+}
+
+// TimeSeries returns the download counts of the series matching the filter,
 // aggregated into step-function lines grouped by `by` (one of
 // os/arch/format/release/asset; anything else means a single combined line).
 // Because counts are stored on-change, values are carried forward: each output
 // point sums every member series' last-known value at that timestamp.
-func (d *DB) TimeSeries(ctx context.Context, source, repo, by string, from, to int64) ([]Point, error) {
-	series, err := d.Series(ctx, source, repo)
+func (d *DB) TimeSeries(ctx context.Context, f Filter, by string, from, to int64) ([]Point, error) {
+	series, err := d.Series(ctx, f.Source, f.Repo)
 	if err != nil {
 		return nil, err
 	}
@@ -160,6 +174,9 @@ func (d *DB) TimeSeries(ctx context.Context, source, repo, by string, from, to i
 	pointsFor := map[int64][]Point{} // ts,count per series (Label unused here)
 
 	for _, s := range series {
+		if !f.matches(s) {
+			continue
+		}
 		pts, err := d.windowPoints(ctx, s.ID, from, to)
 		if err != nil {
 			return nil, err
@@ -263,4 +280,43 @@ func groupLabel(s dbsqlc.Series, by string) string {
 	default:
 		return "" // single combined line
 	}
+}
+
+// fieldValue extends groupLabel with the source/repo dimensions, for Values.
+func fieldValue(s dbsqlc.Series, field string) string {
+	switch field {
+	case "source":
+		return s.Source
+	case "repo":
+		return s.Repo
+	default:
+		return groupLabel(s, field)
+	}
+}
+
+// Values returns the distinct non-empty values of `field` among series matching
+// the filter, sorted — for Grafana template-variable dropdowns (e.g. the list
+// of release versions for a source).
+func (d *DB) Values(ctx context.Context, f Filter, field string) ([]string, error) {
+	series, err := d.Series(ctx, f.Source, f.Repo)
+	if err != nil {
+		return nil, err
+	}
+
+	set := map[string]struct{}{}
+	for _, s := range series {
+		if !f.matches(s) {
+			continue
+		}
+		if v := fieldValue(s, field); v != "" {
+			set[v] = struct{}{}
+		}
+	}
+
+	out := make([]string, 0, len(set))
+	for v := range set {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out, nil
 }

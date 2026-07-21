@@ -56,13 +56,28 @@ func (s *Server) Series(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, out)
 }
 
-// TimeSeries handles GET /api/timeseries?source=&repo=&by=&from=&to=.
+// filterFrom builds a db.Filter from the query's dimension params. Any omitted
+// dimension matches everything, so panels can pin some (e.g. release, format)
+// and split by another (arch).
+func filterFrom(q interface{ Get(key string) string }) db.Filter {
+	return db.Filter{
+		Source:  q.Get("source"),
+		Repo:    q.Get("repo"),
+		Release: q.Get("release"),
+		OS:      q.Get("os"),
+		Arch:    q.Get("arch"),
+		Format:  q.Get("format"),
+	}
+}
+
+// TimeSeries handles
+// GET /api/timeseries?source=&repo=&release=&os=&arch=&format=&by=&from=&to=.
 func (s *Server) TimeSeries(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from := parseTime(q.Get("from"), 0)
 	to := parseTime(q.Get("to"), s.now().Unix())
 
-	points, err := s.db.TimeSeries(r.Context(), q.Get("source"), q.Get("repo"), q.Get("by"), from, to)
+	points, err := s.db.TimeSeries(r.Context(), filterFrom(q), q.Get("by"), from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -72,6 +87,27 @@ func (s *Server) TimeSeries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, r, points)
+}
+
+// Values handles GET /api/values?field=&source=&repo=&... — the distinct values
+// of `field` (release/os/arch/format/source/repo) among matching series, for
+// Grafana template-variable dropdowns. Returns [{"value": "..."}] so Infinity
+// can map it to a variable column.
+func (s *Server) Values(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	vals, err := s.db.Values(r.Context(), filterFrom(q), q.Get("field"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	out := make([]struct {
+		Value string `json:"value"`
+	}, len(vals))
+	for i, v := range vals {
+		out[i].Value = v
+	}
+	writeJSON(w, r, out)
 }
 
 // parseTime reads a unix timestamp, tolerating Grafana's millisecond epochs

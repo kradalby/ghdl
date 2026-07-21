@@ -138,6 +138,7 @@ func serve(ctx context.Context, log *slog.Logger, cfg *config) error {
 	apiSrv := api.New(store)
 	srv.HandleFunc("/api/series", apiSrv.Series)
 	srv.HandleFunc("/api/timeseries", apiSrv.TimeSeries)
+	srv.HandleFunc("/api/values", apiSrv.Values)
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return srv.ListenAndServe(ctx) })
