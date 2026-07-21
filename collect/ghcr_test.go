@@ -2,6 +2,7 @@ package collect
 
 import (
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -39,17 +40,17 @@ func TestParseGHCRVersions(t *testing.T) {
 	versions := parseGHCRVersions(doc)
 	require.Len(t, versions, 50, "one entry per .Box-row version card")
 
-	// The tagged versions page carries a 'latest'-labelled row.
-	var haveLatest bool
+	semver := regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+	var haveSemver bool
 	for _, v := range versions {
-		if v.Label == "" {
-			t.Errorf("empty version label: %+v", v)
-		}
-		if containsTag(v.Label, "latest") {
-			haveLatest = true
+		require.NotEmpty(t, v.Digest, "each version has a digest: %+v", v)
+		require.NotContains(t, v.Label, ",", "labels are a single version, not joined tags")
+		require.NotEmpty(t, v.Label)
+		if semver.MatchString(v.Label) {
+			haveSemver = true
 		}
 	}
-	require.True(t, haveLatest, "a version labelled 'latest' should be present")
+	require.True(t, haveSemver, "at least one major.minor.patch label")
 }
 
 func TestParseNum(t *testing.T) {
@@ -60,23 +61,11 @@ func TestParseNum(t *testing.T) {
 	require.Equal(t, int64(0), parseNum(""))
 }
 
-func containsTag(label, tag string) bool {
-	for _, t := range splitTags(label) {
-		if t == tag {
-			return true
-		}
-	}
-	return false
-}
-
-func splitTags(label string) []string {
-	var out []string
-	start := 0
-	for i := 0; i <= len(label); i++ {
-		if i == len(label) || label[i] == ',' {
-			out = append(out, label[start:i])
-			start = i + 1
-		}
-	}
-	return out
+func TestVersionLabel(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "0.29.2", versionLabel([]string{"latest", "sha-8eea8948", "v0.29.2", "0.29.2", "v0.29", "v0"}))
+	require.Equal(t, "0.28.0", versionLabel([]string{"sha-97fa117c", "v0.28", "v0.28.0", "0.28", "0.28.0"}))
+	require.Equal(t, "development", versionLabel([]string{"main-f20f1f1", "development"}))
+	require.Equal(t, "untagged", versionLabel([]string{"sha-abc123", "main-def456"}))
+	require.Equal(t, "untagged", versionLabel(nil))
 }
