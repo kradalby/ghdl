@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -55,7 +56,10 @@ func (g *GHCR) Collect(ctx context.Context) ([]db.Observation, error) {
 		out = append(out, db.Observation{Source: g.Source(), Repo: repo, Count: total})
 
 		// The versions page is paginated (~50 per page); walk every page so
-		// historic versions are captured, not just the most recent.
+		// historic versions are captured, not just the most recent. Each series
+		// is keyed by digest (unique per version) with a major.minor.patch
+		// release label, so re-pushes of a tag sum under the same version in the
+		// graph rather than colliding into one flip-flopping counter.
 		seen := map[string]bool{}
 		for page := 1; page <= maxVersionPages; page++ {
 			versDoc, err := getHTML(ctx, g.hc, ghcrVersionsURL(owner, pkg, page))
@@ -70,12 +74,12 @@ func (g *GHCR) Collect(ctx context.Context) ([]db.Observation, error) {
 			// last-page-clamps-to-last-page server behaviour).
 			fresh := false
 			for _, v := range versions {
-				if seen[v.Label] {
+				if seen[v.Digest] {
 					continue
 				}
-				seen[v.Label] = true
+				seen[v.Digest] = true
 				fresh = true
-				out = append(out, db.Observation{Source: g.Source(), Repo: repo, Release: v.Label, Count: v.Count})
+				out = append(out, db.Observation{Source: g.Source(), Repo: repo, Release: v.Label, Asset: v.Digest, Count: v.Count})
 			}
 			if !fresh {
 				break
@@ -124,14 +128,14 @@ func parseGHCRTotal(doc *goquery.Document) (int64, error) {
 }
 
 type ghcrVersion struct {
-	Label string
-	Count int64
+	Label  string // major.minor.patch, or a channel tag / "untagged"
+	Digest string // sha256:... — unique per version
+	Count  int64
 }
 
 // parseGHCRVersions extracts per-version pull counts from the versions page.
 // Each version is a .Box-row carrying its tags (a.Label), its digest, and a
-// "Version downloads" count. The label is the version's tags joined by "," or,
-// for untagged builds, a short digest.
+// "Version downloads" count.
 func parseGHCRVersions(doc *goquery.Document) []ghcrVersion {
 	var out []ghcrVersion
 
@@ -148,20 +152,36 @@ func parseGHCRVersions(doc *goquery.Document) []ghcrVersion {
 			}
 		})
 
-		label := strings.Join(tags, ",")
-		if label == "" {
-			if d, ok := row.Find("[value^='sha256:']").Attr("value"); ok {
-				label = shortDigest(d)
-			}
-		}
-		if label == "" {
+		digest, _ := row.Find("[value^='sha256:']").Attr("value")
+		if len(tags) == 0 && digest == "" {
 			return
 		}
 
-		out = append(out, ghcrVersion{Label: label, Count: count})
+		out = append(out, ghcrVersion{Label: versionLabel(tags), Digest: digest, Count: count})
 	})
 
 	return out
+}
+
+// semverTag matches a bare major.minor.patch tag, optionally v-prefixed.
+var semverTag = regexp.MustCompile(`^v?(\d+\.\d+\.\d+)$`)
+
+// versionLabel picks a major.minor.patch label from a version's tags, preferring
+// a semver tag (normalised without a leading "v"); failing that a human channel
+// tag (e.g. "development", "stable", "latest"), else "untagged". Build tags like
+// "sha-1a2b3c" and "main-1a2b3c" are skipped.
+func versionLabel(tags []string) string {
+	for _, t := range tags {
+		if m := semverTag.FindStringSubmatch(t); m != nil {
+			return m[1]
+		}
+	}
+	for _, t := range tags {
+		if !strings.HasPrefix(t, "sha-") && !strings.ContainsRune(t, '-') {
+			return t
+		}
+	}
+	return "untagged"
 }
 
 // versionDownloads pulls the count out of a version row's "Version downloads"
@@ -179,12 +199,4 @@ func versionDownloads(row *goquery.Selection) (int64, bool) {
 		return false
 	})
 	return count, found
-}
-
-func shortDigest(d string) string {
-	d = strings.TrimPrefix(d, "sha256:")
-	if len(d) > 12 {
-		d = d[:12]
-	}
-	return "sha256:" + d
 }
