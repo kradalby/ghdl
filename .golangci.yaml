@@ -32,6 +32,15 @@ linters:
     - varnamelen
     - wrapcheck
     - wsl
+    # Newer golangci linters beyond headscale's list, disabled in the same
+    # "pedantic style, not correctness" spirit as wsl/revive above.
+    - wsl_v5 # wsl renamed in golangci v2
+    - nlreturn # blank-line-before-return pedantry
+    - noinlineerr # forbids the standard `if err := f(); err != nil` idiom
+    - nonamedreturns # named returns are used deliberately
+    - err113 # dynamic fmt.Errorf is fine in a small app
+    - modernize # style suggestions, not bugs
+    - errchkjson # false-positives on `any` HTTP response bodies
   settings:
     goconst:
       # Test fixtures repeat strings by their nature; extracting them obscures
@@ -85,7 +94,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/kradalby/ts1p
+        - github.com/kradalby/ghdl
   exclusions:
     paths:
       - gen/

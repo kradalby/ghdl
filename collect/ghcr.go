@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -117,7 +118,7 @@ func parseGHCRTotal(doc *goquery.Document) (int64, error) {
 		return true
 	})
 	if !found {
-		return 0, fmt.Errorf("Total downloads not found (markup changed?)")
+		return 0, errors.New("total downloads not found (markup changed?)")
 	}
 	return total, nil
 }

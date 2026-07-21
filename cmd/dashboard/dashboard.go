@@ -31,7 +31,7 @@ const (
 	dockerRepo = "headscale/headscale" // Docker Hub
 )
 
-func new[T any](v T) *T { return &v }
+func ptr[T any](v T) *T { return &v }
 
 // legend configures a panel legend. Per the project convention, every panel
 // shows a legend; multi-series panels get a table with last/max columns.
@@ -48,7 +48,7 @@ func legend(multi bool) *common.VizLegendOptionsBuilder {
 // --- Prometheus (service dashboard) helpers ---
 
 func promDS() common.DataSourceRef {
-	return common.DataSourceRef{Type: new("prometheus"), Uid: new("${" + promVar + "}")}
+	return common.DataSourceRef{Type: ptr("prometheus"), Uid: ptr("${" + promVar + "}")}
 }
 
 func promQuery(expr, legendFmt string) *prometheus.DataqueryBuilder {
@@ -77,7 +77,7 @@ func promStat(title, desc, unit, expr, legendFmt string) *stat.PanelBuilder {
 // --- Infinity (data dashboard) helpers ---
 
 func infinityDS() common.DataSourceRef {
-	return common.DataSourceRef{Type: new("yesoreyeram-infinity-datasource"), Uid: new("${" + infinityVar + "}")}
+	return common.DataSourceRef{Type: ptr("yesoreyeram-infinity-datasource"), Uid: ptr("${" + infinityVar + "}")}
 }
 
 // infinityTarget builds an Infinity JSON-over-URL query against ghdl's
@@ -169,7 +169,7 @@ func buildServiceDashboard() (dashboard.Dashboard, error) {
 		WithRow(dashboard.NewRowBuilder("Health")).
 		WithPanel(promStat("Series tracked",
 			"Number of distinct series (source × repo × release × asset) in the database.",
-			units.Short, "max(ghdl_series_total)", "series").
+			units.Short, "max(ghdl_series)", "series").
 			GraphMode(common.BigValueGraphModeNone)).
 		WithPanel(promStat("GitHub rate limit remaining",
 			"GitHub API budget left after the last collection. Should stay near 5000.",
