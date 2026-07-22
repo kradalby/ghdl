@@ -89,6 +89,7 @@ func infinityTarget(refID, url string) *variants.UnknownDataqueryBuilder {
 		"datasource":    map[string]any{"type": "yesoreyeram-infinity-datasource", "uid": "${" + infinityVar + "}"},
 		"type":          "json",
 		"source":        "url",
+		"parser":        "backend", // required, or Infinity returns the rows unparsed and the panel is empty
 		"format":        "timeseries",
 		"url":           url,
 		"url_options":   map[string]any{"method": "GET"},
@@ -143,6 +144,7 @@ func valuesVar(name, label, field, source, repo string) *dashboard.QueryVariable
 			"datasource":    map[string]any{"type": "yesoreyeram-infinity-datasource", "uid": "${" + infinityVar + "}"},
 			"type":          "json",
 			"source":        "url",
+			"parser":        "backend", // required, or the dropdown stays empty
 			"format":        "table",
 			"url":           "/api/values?field=" + field + "&source=" + source + "&repo=" + repo,
 			"url_options":   map[string]any{"method": "GET"},
