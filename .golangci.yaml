@@ -35,6 +35,7 @@ linters:
     # Newer golangci linters beyond headscale's list, disabled in the same
     # "pedantic style, not correctness" spirit as wsl/revive above.
     - wsl_v5 # wsl renamed in golangci v2
+    - exhaustruct_v5 # exhaustruct renamed in golangci v2.13
     - nlreturn # blank-line-before-return pedantry
     - noinlineerr # forbids the standard `if err := f(); err != nil` idiom
     - nonamedreturns # named returns are used deliberately
