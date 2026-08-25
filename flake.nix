@@ -10,10 +10,11 @@
   };
 
   outputs =
-    { self
-    , nixpkgs
-    , flake-utils
-    , flake-checks
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      flake-checks,
     }:
     let
       hashes = builtins.fromJSON (builtins.readFile ./flakehashes.json);
@@ -60,10 +61,13 @@
         # The dashboard generator is its own build so the Grafana Foundation SDK
         # stays out of the service binary. Its built output is captured as a
         # derivation below — running it *is* the validation (bad JSON exits non-zero).
-        dashboard = fc.goBuild (common // {
-          pname = "ghdl-dashboard";
-          subPackages = [ "cmd/dashboard" ];
-        });
+        dashboard = fc.goBuild (
+          common
+          // {
+            pname = "ghdl-dashboard";
+            subPackages = [ "cmd/dashboard" ];
+          }
+        );
       in
       {
         packages = {
@@ -104,15 +108,28 @@
           # //go:generate directives, so the drift check drives sqlc directly.
           # sqlc reads sqlc.yaml + db/schema.sql + db/queries/, all of which the
           # default .go-only src filter drops, hence the extraSrc additions.
-          generate = fc.goGenerate (common // {
-            extraSrc = common.extraSrc ++ [ ./sqlc.yaml ./db/queries ];
-            nativeCheckInputs = [ pkgs.sqlc ];
-            generateCommand = "sqlc generate";
-          });
+          generate = fc.goGenerate (
+            common
+            // {
+              extraSrc = common.extraSrc ++ [
+                ./sqlc.yaml
+                ./db/queries
+              ];
+              nativeCheckInputs = [ pkgs.sqlc ];
+              generateCommand = "sqlc generate";
+            }
+          );
         }
         # NixOS module evaluation needs a Linux system.
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-          module-eval = import ./module-eval.nix { inherit pkgs self nixpkgs system; };
+          module-eval = import ./module-eval.nix {
+            inherit
+              pkgs
+              self
+              nixpkgs
+              system
+              ;
+          };
         };
       }
     );

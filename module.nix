@@ -5,7 +5,12 @@
 #     environmentFile = config.age.secrets.ghdl.path; # GHDL_GITHUB_TOKEN=... TS_AUTHKEY=...
 #   };
 self:
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.services.ghdl;
   # A Go time.Duration string (e.g. "24h", "1h30m"), validated at eval time so a
@@ -93,8 +98,14 @@ in
     systemd.services.ghdl = {
       description = "ghdl download-metrics scraper";
       wantedBy = [ "multi-user.target" ];
-      after = [ "network-online.target" "nss-lookup.target" ];
-      wants = [ "network-online.target" "nss-lookup.target" ];
+      after = [
+        "network-online.target"
+        "nss-lookup.target"
+      ];
+      wants = [
+        "network-online.target"
+        "nss-lookup.target"
+      ];
 
       serviceConfig = {
         ExecStart = lib.escapeShellArgs [
@@ -139,7 +150,12 @@ in
         ProtectKernelModules = true;
         ProtectControlGroups = true;
         # AF_UNIX is required for tsnet's local API socket.
-        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" "AF_NETLINK" ];
+        RestrictAddressFamilies = [
+          "AF_UNIX"
+          "AF_INET"
+          "AF_INET6"
+          "AF_NETLINK"
+        ];
         RestrictNamespaces = true;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;
