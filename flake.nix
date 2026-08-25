@@ -27,7 +27,23 @@
     // flake-utils.lib.eachDefaultSystem (
       system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        # nixpkgs' bare `go` is still 1.26 while this repo targets 1.27, so the
+        # Go version is named explicitly everywhere as `go_latest`. The Go dev
+        # tools that ship *wrapped with a `go` on PATH* (goimports, via gotools)
+        # must be rebuilt against it too: otherwise that wrapper's older `go`
+        # sees the 1.27 directive in go.mod and GOTOOLCHAIN=auto tries to fetch
+        # a toolchain from inside the network-less treefmt sandbox.
+        goOverlay = _final: prev: {
+          gofumpt = prev.gofumpt.override { buildGoModule = prev.buildGoLatestModule; };
+          gotools = prev.gotools.override {
+            buildGoModule = prev.buildGoLatestModule;
+            go = prev.go_latest;
+          };
+        };
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ goOverlay ];
+        };
         fc = flake-checks.lib;
         common = {
           inherit pkgs;
@@ -35,7 +51,7 @@
           pname = "ghdl";
           version = "0.1.0";
           vendorHash = hashes.vendor.sri;
-          goPkg = pkgs.go_1_26;
+          goPkg = pkgs.go_latest;
           subPackages = [ "cmd/ghdl" ];
           # db/db.go embeds schema.sql via //go:embed; flake-checks' src filter
           # whitelists .go files, so the embedded schema must be added explicitly.
@@ -63,7 +79,7 @@
         formatter = fc.formatter common;
         devShells.default = pkgs.mkShell {
           packages = [
-            pkgs.go_1_26
+            pkgs.go_latest
             pkgs.gopls
             pkgs.golangci-lint
             pkgs.gofumpt
@@ -73,6 +89,11 @@
             pkgs.govulncheck
             pkgs.gnumake
           ];
+          shellHook = ''
+            # Never fetch a toolchain: a go.mod ahead of nixpkgs' Go must be a
+            # loud error, not a silent download from go.dev outside the store.
+            export GOTOOLCHAIN=local
+          '';
         };
         checks = {
           build = fc.goBuild common;
