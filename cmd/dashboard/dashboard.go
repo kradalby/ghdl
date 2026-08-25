@@ -31,8 +31,6 @@ const (
 	dockerRepo = "headscale/headscale" // Docker Hub
 )
 
-func ptr[T any](v T) *T { return &v }
-
 // legend configures a panel legend. Per the project convention, every panel
 // shows a legend; multi-series panels get a table with last/max columns.
 func legend(multi bool) *common.VizLegendOptionsBuilder {
@@ -48,7 +46,7 @@ func legend(multi bool) *common.VizLegendOptionsBuilder {
 // --- Prometheus (service dashboard) helpers ---
 
 func promDS() common.DataSourceRef {
-	return common.DataSourceRef{Type: ptr("prometheus"), Uid: ptr("${" + promVar + "}")}
+	return common.DataSourceRef{Type: new("prometheus"), Uid: new("${" + promVar + "}")}
 }
 
 func promQuery(expr, legendFmt string) *prometheus.DataqueryBuilder {
@@ -77,7 +75,7 @@ func promStat(title, desc, unit, expr, legendFmt string) *stat.PanelBuilder {
 // --- Infinity (data dashboard) helpers ---
 
 func infinityDS() common.DataSourceRef {
-	return common.DataSourceRef{Type: ptr("yesoreyeram-infinity-datasource"), Uid: ptr("${" + infinityVar + "}")}
+	return common.DataSourceRef{Type: new("yesoreyeram-infinity-datasource"), Uid: new("${" + infinityVar + "}")}
 }
 
 // infinityTarget builds an Infinity JSON-over-URL query against ghdl's
