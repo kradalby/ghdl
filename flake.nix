@@ -100,6 +100,15 @@
           gotest = fc.goTest (common // { goRace = true; });
           golangci-lint = fc.goLint common;
           formatting = fc.goFormat common;
+          # db/dbsqlc is sqlc output, not `go generate` output: there are no
+          # //go:generate directives, so the drift check drives sqlc directly.
+          # sqlc reads sqlc.yaml + db/schema.sql + db/queries/, all of which the
+          # default .go-only src filter drops, hence the extraSrc additions.
+          generate = fc.goGenerate (common // {
+            extraSrc = common.extraSrc ++ [ ./sqlc.yaml ./db/queries ];
+            nativeCheckInputs = [ pkgs.sqlc ];
+            generateCommand = "sqlc generate";
+          });
         }
         # NixOS module evaluation needs a Linux system.
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
