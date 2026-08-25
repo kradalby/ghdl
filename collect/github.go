@@ -21,7 +21,7 @@ type GitHub struct {
 // NewGitHub builds a GitHub collector. An empty token works but is subject to
 // the low unauthenticated rate limit; a token raises it to 5000 req/hr.
 func NewGitHub(token string, repos []string) *GitHub {
-	c := github.NewClient(nil)
+	c := github.NewClient(newHTTPClient())
 	if token != "" {
 		c = c.WithAuthToken(token)
 	}
