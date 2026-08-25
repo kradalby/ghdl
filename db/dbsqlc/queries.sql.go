@@ -192,8 +192,7 @@ type UpsertSeriesParams struct {
 // RETURNING return the existing row's id on conflict (SQLite can't RETURN from
 // a bare DO NOTHING).
 func (q *Queries) UpsertSeries(ctx context.Context, arg UpsertSeriesParams) (int64, error) {
-	row := q.db.QueryRowContext(
-		ctx, upsertSeries,
+	row := q.db.QueryRowContext(ctx, upsertSeries,
 		arg.Source,
 		arg.Repo,
 		arg.Release,
