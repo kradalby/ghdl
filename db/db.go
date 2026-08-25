@@ -10,7 +10,8 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/juanfont/headscale/hscontrol/db/sqliteconfig"
 	"github.com/tailscale/squibble"
@@ -194,11 +195,7 @@ func (d *DB) TimeSeries(ctx context.Context, f Filter, by string, from, to int64
 		pointsFor[s.ID] = pts
 	}
 
-	labels := make([]string, 0, len(groups))
-	for l := range groups {
-		labels = append(labels, l)
-	}
-	sort.Strings(labels)
+	labels := slices.Sorted(maps.Keys(groups))
 
 	var out []Point
 	for _, label := range labels {
@@ -247,7 +244,7 @@ func aggregate(label string, ids []int64, pointsFor map[int64][]Point) []Point {
 	for ts := range tsSet {
 		tsList = append(tsList, ts)
 	}
-	sort.Slice(tsList, func(i, j int) bool { return tsList[i] < tsList[j] })
+	slices.Sort(tsList)
 
 	idx := make(map[int64]int, len(ids))
 	cur := make(map[int64]int64, len(ids))
@@ -318,10 +315,5 @@ func (d *DB) Values(ctx context.Context, f Filter, field string) ([]string, erro
 		}
 	}
 
-	out := make([]string, 0, len(set))
-	for v := range set {
-		out = append(out, v)
-	}
-	sort.Strings(out)
-	return out, nil
+	return slices.Sorted(maps.Keys(set)), nil
 }
