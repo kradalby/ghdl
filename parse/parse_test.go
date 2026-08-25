@@ -36,6 +36,12 @@ func TestFilename(t *testing.T) {
 		{"tool-darwin-aarch64.tar.gz", Asset{OS: "darwin", Arch: "arm64", Format: "tar.gz"}},
 		{"tool_linux_x86_64.rpm", Asset{OS: "linux", Arch: "amd64", Format: "rpm"}},
 
+		// A leading token that happens to name an arch must not shadow the real
+		// one: first-match-wins filed these under 386 forever, because
+		// UpsertSeries never rewrites os/arch/format once a series exists.
+		{"i386-tools_1.0_linux_amd64.deb", Asset{OS: "linux", Arch: "amd64", Format: "deb"}},
+		{"arm-utils_2.0_linux_arm64", Asset{OS: "linux", Arch: "arm64", Format: "bin"}},
+
 		// Unknown: everything empty, nothing crashes.
 		{"totally-opaque-name", Asset{}},
 	}

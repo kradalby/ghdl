@@ -62,7 +62,13 @@ func Filename(name string) Asset {
 				continue
 			}
 		}
-		if v, ok := archTokens[t]; ok && (a.Arch == "" || a.Arch == "arm") {
+		// Last match wins. First-match-wins loses the real arch whenever an
+		// earlier token happens to name one too — "i386-tools_1.0_linux_amd64"
+		// would file amd64 downloads under 386, and UpsertSeries never rewrites
+		// os/arch/format, so the mislabel would outlive the fix. The armvN
+		// guard is kept: a bare "arm" must not overwrite a more specific
+		// variant that already matched.
+		if v, ok := archTokens[t]; ok && (v != "arm" || !strings.HasPrefix(a.Arch, "armv")) {
 			a.Arch = v
 		}
 	}
