@@ -18,7 +18,7 @@ type DockerHub struct {
 
 // NewDockerHub builds a Docker Hub collector.
 func NewDockerHub(repos []string) *DockerHub {
-	return &DockerHub{repos: repos, hc: http.DefaultClient}
+	return &DockerHub{repos: repos, hc: newHTTPClient()}
 }
 
 // Source implements Collector.

@@ -30,7 +30,7 @@ type GHCR struct {
 
 // NewGHCR builds a GHCR collector.
 func NewGHCR(repos []string) *GHCR {
-	return &GHCR{repos: repos, hc: http.DefaultClient}
+	return &GHCR{repos: repos, hc: newHTTPClient()}
 }
 
 // Source implements Collector.
@@ -94,9 +94,20 @@ func (g *GHCR) Collect(ctx context.Context) ([]db.Observation, error) {
 				continue
 			}
 			for _, s := range subs {
+				// A sub-manifest missing from the untagged page has no count.
+				// Recording 0 would be indistinguishable from a real zero, and
+				// db.Save has no monotonicity guard: the fabricated zero is
+				// stored as a genuine observation of a cumulative counter, so
+				// the graph dives to zero and aggregate() drags the whole arch
+				// line down with it. Skip instead.
+				count, ok := subCount[s.Digest]
+				if !ok {
+					continue
+				}
+
 				out = append(out, db.Observation{
 					Source: g.Source(), Repo: repo, Release: v.Label,
-					OS: s.OS, Arch: s.Arch, Asset: s.Digest, Count: subCount[s.Digest],
+					OS: s.OS, Arch: s.Arch, Asset: s.Digest, Count: count,
 				})
 			}
 		}
@@ -156,22 +167,34 @@ func ghcrVersionsURL(owner, pkg, versionType string, page int) string {
 // parseGHCRTotal extracts the repo-wide "Total downloads" number, which renders
 // as an <h3 title="N"> sibling of a <span>Total downloads</span>.
 func parseGHCRTotal(doc *goquery.Document) (int64, error) {
-	var total int64
+	var (
+		total int64
+		perr  error
+	)
+
 	found := false
+
 	doc.Find("span").EachWithBreak(func(_ int, s *goquery.Selection) bool {
 		if strings.TrimSpace(s.Text()) != "Total downloads" {
 			return true
 		}
-		if t, ok := s.Parent().Find("h3").Attr("title"); ok {
-			total = parseNum(t)
-			found = true
-			return false
+		t, ok := s.Parent().Find("h3").Attr("title")
+		if !ok {
+			return true
 		}
-		return true
+		total, perr = parseNum(t)
+		found = true
+		return false
 	})
+
 	if !found {
 		return 0, errors.New("total downloads not found (markup changed?)")
 	}
+
+	if perr != nil {
+		return 0, fmt.Errorf("total downloads: %w", perr)
+	}
+
 	return total, nil
 }
 
@@ -258,16 +281,27 @@ func rowDigest(row *goquery.Selection) string {
 // element, whose parent span reads like "1,234 Version downloads".
 func versionDownloads(row *goquery.Selection) (int64, bool) {
 	var count int64
+
 	found := false
+
 	row.Find("span.sr-only").EachWithBreak(func(_ int, s *goquery.Selection) bool {
 		if strings.TrimSpace(s.Text()) != "Version downloads" {
 			return true
 		}
+
 		text := strings.Replace(s.Parent().Text(), "Version downloads", "", 1)
-		count = parseNum(text)
-		found = true
+
+		var err error
+
+		count, err = parseNum(text)
+		// The label alone is not evidence of a count: report found only when a
+		// number actually parsed, so a markup change drops the row instead of
+		// recording a truncated one.
+		found = err == nil
+
 		return false
 	})
+
 	return count, found
 }
 

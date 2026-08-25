@@ -41,24 +41,56 @@ func TestParseGHCRVersions(t *testing.T) {
 	require.Len(t, versions, 50, "one entry per .Box-row version card")
 
 	semver := regexp.MustCompile(`^\d+\.\d+\.\d+$`)
-	var haveSemver bool
+
+	var (
+		haveSemver bool
+		nonZero    int
+	)
+
 	for _, v := range versions {
 		require.NotEmpty(t, v.Digest, "each version has a digest: %+v", v)
 		require.NotContains(t, v.Label, ",", "labels are a single version, not joined tags")
 		require.NotEmpty(t, v.Label)
+
 		if semver.MatchString(v.Label) {
 			haveSemver = true
 		}
+
+		if v.Count != 0 {
+			nonZero++
+		}
 	}
+
 	require.True(t, haveSemver, "at least one major.minor.patch label")
+	// Counts are the point of the scrape, so assert they parse. Without this the
+	// suite stayed green even if every count came back 0.
+	require.Positive(t, nonZero, "some versions have a non-zero download count")
 }
 
 func TestParseNum(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, int64(1418338), parseNum("1,418,338"))
-	require.Equal(t, int64(0), parseNum("0"))
-	require.Equal(t, int64(41918), parseNum("  41,918 "))
-	require.Equal(t, int64(0), parseNum(""))
+
+	for _, tt := range []struct {
+		in   string
+		want int64
+	}{
+		{"1,418,338", 1418338},
+		{"0", 0},
+		{"  41,918 ", 41918},
+		{"\n        \n    \n\n        120\n        \n      ", 120},
+	} {
+		got, err := parseNum(tt.in)
+		require.NoError(t, err, "parseNum(%q)", tt.in)
+		require.Equal(t, tt.want, got, "parseNum(%q)", tt.in)
+	}
+
+	// Anything that is not a plain integer must fail rather than truncate.
+	// "1.42M" silently became 1 before, which is worse than no count at all:
+	// it is a plausible number that corrupts the series permanently.
+	for _, in := range []string{"", "1.42M", "1.4k", "n/a", "12 downloads"} {
+		_, err := parseNum(in)
+		require.ErrorIs(t, err, errNotANumber, "parseNum(%q) must not truncate", in)
+	}
 }
 
 // TestParseGHCRUntagged guards the untagged page, which renders the digest as
@@ -76,9 +108,18 @@ func TestParseGHCRUntagged(t *testing.T) {
 
 	versions := parseGHCRVersions(doc)
 	require.Len(t, versions, 50)
+
+	nonZero := 0
+
 	for _, v := range versions {
 		require.Regexp(t, `^sha256:[0-9a-f]{64}$`, v.Digest, "untagged digest from link text")
+
+		if v.Count != 0 {
+			nonZero++
+		}
 	}
+
+	require.Positive(t, nonZero, "some sub-manifests have a non-zero download count")
 }
 
 func TestNormArch(t *testing.T) {
