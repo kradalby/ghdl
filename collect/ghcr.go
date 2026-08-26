@@ -237,14 +237,27 @@ func parseGHCRVersions(doc *goquery.Document) []ghcrVersion {
 // semverTag matches a bare major.minor.patch tag, optionally v-prefixed.
 var semverTag = regexp.MustCompile(`^v?(\d+\.\d+\.\d+)$`)
 
-// versionLabel picks a major.minor.patch label from a version's tags, preferring
-// a semver tag (normalised without a leading "v"); failing that a human channel
-// tag (e.g. "development", "stable", "latest"), else "untagged". Build tags like
-// "sha-1a2b3c" and "main-1a2b3c" are skipped.
+// semverPreTag additionally accepts a prerelease suffix: "0.29.0-beta.4",
+// "0.13.0-beta1", and "0.29.3-debug", which is what a debug image's tag looks
+// like to semver. It is tried only after the plain form, so a version tagged
+// both ways keeps the plain label.
+var semverPreTag = regexp.MustCompile(`^v?(\d+\.\d+\.\d+-[0-9A-Za-z.-]+)$`)
+
+// versionLabel picks a version label from a version's tags, preferring a plain
+// semver tag (normalised without a leading "v"), then a prerelease one, then a
+// human channel tag (e.g. "development", "stable", "latest"), else "untagged".
+// Build tags like "sha-1a2b3c" and "main-1a2b3c" are skipped.
+//
+// Prereleases only stopped at the plain form once, and every beta and rc image
+// landed in "untagged" alongside the .sbom attestations. Because a series is
+// keyed on the digest, db.Save relabels those rows in place when they are
+// scraped again, so their history survives the correction.
 func versionLabel(tags []string) string {
-	for _, t := range tags {
-		if m := semverTag.FindStringSubmatch(t); m != nil {
-			return m[1]
+	for _, re := range []*regexp.Regexp{semverTag, semverPreTag} {
+		for _, t := range tags {
+			if m := re.FindStringSubmatch(t); m != nil {
+				return m[1]
+			}
 		}
 	}
 	for _, t := range tags {
