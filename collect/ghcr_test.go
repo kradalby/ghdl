@@ -138,4 +138,17 @@ func TestVersionLabel(t *testing.T) {
 	require.Equal(t, "development", versionLabel([]string{"main-f20f1f1", "development"}))
 	require.Equal(t, "untagged", versionLabel([]string{"sha-abc123", "main-def456"}))
 	require.Equal(t, "untagged", versionLabel(nil))
+
+	// Prereleases: both headscale's tag spellings, and a debug image, which is
+	// a prerelease as far as semver is concerned.
+	require.Equal(t, "0.29.0-beta.4", versionLabel([]string{"sha-de9db9c", "v0.29.0-beta.4", "0.29.0-beta.4"}))
+	require.Equal(t, "0.13.0-beta1", versionLabel([]string{"0.13.0-beta1", "sha-abc123"}))
+	require.Equal(t, "0.29.3-debug", versionLabel([]string{"latest-debug", "0.29-debug", "v0.29.3-debug", "0.29.3-debug", "0-debug"}))
+
+	// A plain tag still wins over a prerelease one on the same version.
+	require.Equal(t, "0.29.3", versionLabel([]string{"v0.29.3-rc.1", "0.29.3", "latest"}))
+
+	// Build and backup tags are still not versions.
+	require.Equal(t, "untagged", versionLabel([]string{"sha-01b85e5-debug", "main-036760d"}))
+	require.Equal(t, "untagged", versionLabel([]string{"1-ogen-backup-0e77a212b"}))
 }
