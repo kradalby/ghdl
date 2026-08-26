@@ -28,3 +28,29 @@ func TestDashboardsBuild(t *testing.T) {
 		require.NotEmpty(t, b)
 	}
 }
+
+// TestVariablesUseInfinityEnvelope pins what silently emptied the dropdowns:
+// Infinity reads a {queryType:"infinity", infinityQuery:{…}} envelope and
+// treats anything else as a legacy string query, which returns nothing.
+func TestVariablesUseInfinityEnvelope(t *testing.T) {
+	t.Parallel()
+
+	data, err := buildDataDashboard()
+	require.NoError(t, err)
+
+	queries := 0
+	for _, v := range data.Templating.List {
+		if v.Type != "query" {
+			continue
+		}
+		queries++
+		require.NotNil(t, v.Query, v.Name)
+		q := v.Query.Map
+		require.Equal(t, "infinity", q["queryType"], v.Name)
+		inner, ok := q["infinityQuery"].(map[string]any)
+		require.True(t, ok, v.Name)
+		require.Equal(t, "backend", inner["parser"], v.Name)
+		require.Contains(t, inner["url"], "/api/values?field=", v.Name)
+	}
+	require.Equal(t, 3, queries, "version, arch and format")
+}
