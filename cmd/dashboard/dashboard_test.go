@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -58,4 +60,27 @@ func TestVariablesUseInfinityEnvelope(t *testing.T) {
 		require.Contains(t, inner["url"], "/api/values?field=", v.Name)
 	}
 	require.Equal(t, 3, queries, "version, arch and format")
+}
+
+// TestVersionReachesEveryPanel pins the invariant nothing else does: a panel
+// that omits the Version variable from its URL is silently deaf to the
+// dropdown. Both "by version" panels shipped that way, so the selector could
+// not narrow the very panels it exists for.
+func TestVersionReachesEveryPanel(t *testing.T) {
+	t.Parallel()
+
+	data, err := buildDataDashboard()
+	require.NoError(t, err)
+
+	b, err := json.Marshal(data)
+	require.NoError(t, err)
+	urls := regexp.MustCompile(`/api/timeseries\?[^"]+`).FindAllString(string(b), -1)
+	require.Len(t, urls, 7, "six filterable panels plus Docker Hub")
+
+	for _, u := range urls {
+		if strings.Contains(u, "source=dockerhub") {
+			continue // repo total only; the API exposes nothing to filter
+		}
+		require.Contains(t, u, "release=${version}", u)
+	}
 }
