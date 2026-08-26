@@ -47,6 +47,24 @@ func (q *Queries) CountSeries(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const deleteSeries = `-- name: DeleteSeries :exec
+DELETE FROM series WHERE id = ?
+`
+
+func (q *Queries) DeleteSeries(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteSeries, id)
+	return err
+}
+
+const deleteSeriesObservations = `-- name: DeleteSeriesObservations :exec
+DELETE FROM observations WHERE series_id = ?
+`
+
+func (q *Queries) DeleteSeriesObservations(ctx context.Context, seriesID int64) error {
+	_, err := q.db.ExecContext(ctx, deleteSeriesObservations, seriesID)
+	return err
+}
+
 const insertObservation = `-- name: InsertObservation :exec
 INSERT INTO observations (series_id, ts, count)
 VALUES (?, ?, ?)
@@ -168,6 +186,66 @@ func (q *Queries) RangeObservations(ctx context.Context, arg RangeObservationsPa
 		return nil, err
 	}
 	return items, nil
+}
+
+const seriesByAsset = `-- name: SeriesByAsset :many
+SELECT id, release
+FROM series
+WHERE source = ?1
+  AND repo = ?2
+  AND asset = ?3
+ORDER BY id
+`
+
+type SeriesByAssetParams struct {
+	Source string `db:"source"`
+	Repo   string `db:"repo"`
+	Asset  string `db:"asset"`
+}
+
+type SeriesByAssetRow struct {
+	ID      int64  `db:"id"`
+	Release string `db:"release"`
+}
+
+// Every series recording one artifact within a source+repo, oldest first. Where
+// the asset is a content digest this identifies the artifact on its own, so a
+// second row means its release label changed and the old row was left behind.
+func (q *Queries) SeriesByAsset(ctx context.Context, arg SeriesByAssetParams) ([]SeriesByAssetRow, error) {
+	rows, err := q.db.QueryContext(ctx, seriesByAsset, arg.Source, arg.Repo, arg.Asset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SeriesByAssetRow
+	for rows.Next() {
+		var i SeriesByAssetRow
+		if err := rows.Scan(&i.ID, &i.Release); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setSeriesRelease = `-- name: SetSeriesRelease :exec
+UPDATE series SET release = ?1 WHERE id = ?2
+`
+
+type SetSeriesReleaseParams struct {
+	Release string `db:"release"`
+	ID      int64  `db:"id"`
+}
+
+func (q *Queries) SetSeriesRelease(ctx context.Context, arg SetSeriesReleaseParams) error {
+	_, err := q.db.ExecContext(ctx, setSeriesRelease, arg.Release, arg.ID)
+	return err
 }
 
 const upsertSeries = `-- name: UpsertSeries :one
