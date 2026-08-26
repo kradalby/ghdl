@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -207,10 +208,53 @@ type Filter struct {
 }
 
 func (f Filter) matches(s dbsqlc.Series) bool {
-	return (f.Release == "" || s.Release == f.Release) &&
+	return matchRelease(f.Release, s.Release) &&
 		(f.OS == "" || s.Os == f.OS) &&
 		(f.Arch == "" || s.Arch == f.Arch) &&
 		(f.Format == "" || s.Format == f.Format)
+}
+
+// versionLine captures the major.minor prefix of a version string in the
+// spelling it was stored with: "v0.29.3" -> "v0.29", "0.29.0-beta.4" -> "0.29".
+// Anchored at both ends, and the optional tail must start at a separator, so
+// "0.29" never matches "0.290.1" and "0.2" never matches "0.29.1".
+var versionLine = regexp.MustCompile(`^(v?\d+\.\d+)(?:[.+-].*)?$`)
+
+// releaseLine returns the minor-version line a release belongs to, or "" for a
+// release that is not a version at all ("latest", "untagged", "development").
+func releaseLine(release string) string {
+	m := versionLine.FindStringSubmatch(release)
+	if m == nil {
+		return ""
+	}
+
+	return m[1]
+}
+
+// matchRelease compares a filter's release against a series'. Two relaxations
+// over ==, both needed by the dashboard's single Version dropdown:
+//
+//   - the leading "v" is ignored, because github_release stores the raw git tag
+//     ("v0.29.3") while ghcr stores it stripped ("0.29.3"), and the dropdown is
+//     fed from github_release only;
+//   - a minor line ("v0.29") matches every release in it, so one selection can
+//     mean "the whole 0.29 rollout" without merging it into one line: grouping
+//     is still whatever `by` says.
+//
+// ponytail: string matching on major.minor, nothing more. No ranges, no ">=",
+// no semver precedence, no patch-level lines. "Everything since 0.27" is a
+// different feature, not a wider regexp.
+func matchRelease(want, have string) bool {
+	want, have = strings.TrimPrefix(want, "v"), strings.TrimPrefix(have, "v")
+	if want == "" {
+		return true
+	}
+	if want == have {
+		return true
+	}
+	l := releaseLine(have)
+
+	return l != "" && l == want
 }
 
 // TimeSeries returns the download counts of the series matching the filter,
@@ -370,6 +414,13 @@ func (d *DB) Values(ctx context.Context, f Filter, field string) ([]string, erro
 		}
 		if v := dimension(s, field); v != "" {
 			set[v] = struct{}{}
+			// Minor lines are synthesised, not stored: "v0.29" appears in the
+			// Version dropdown next to v0.29.3 and selects the whole line.
+			if field == "release" {
+				if l := releaseLine(v); l != "" {
+					set[l] = struct{}{}
+				}
+			}
 		}
 	}
 

@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -125,11 +127,11 @@ func TestFilterDrilldown(t *testing.T) {
 	// Values(release) lists both versions; scoped by arch=arm64 lists only 1.0.0.
 	rels, err := d.Values(ctx, Filter{Source: "github_release", Repo: "r"}, "release")
 	require.NoError(t, err)
-	require.Equal(t, []string{"0.9.0", "1.0.0"}, rels)
+	require.Equal(t, []string{"0.9", "0.9.0", "1.0", "1.0.0"}, rels)
 
 	arm, err := d.Values(ctx, Filter{Source: "github_release", Repo: "r", Arch: "arm64"}, "release")
 	require.NoError(t, err)
-	require.Equal(t, []string{"1.0.0"}, arm)
+	require.Equal(t, []string{"1.0", "1.0.0"}, arm)
 }
 
 // TestOpenIgnoresLitestreamTables reproduces the deploy blocker: litestream
@@ -262,4 +264,67 @@ func TestRelabelKeepsHistory(t *testing.T) {
 	pts, err = d.TimeSeries(ctx, Filter{Source: "ghcr", Repo: "r"}, "arch", 0, 400)
 	require.NoError(t, err)
 	require.Equal(t, int64(40), pts[len(pts)-1].Count, "40, not 80")
+}
+
+// TestReleaseLineFilter is both user requirements in one: selecting a minor
+// line keeps every release in it as its OWN line (never merged), selecting an
+// exact release keeps only that one, and both work across the github_release
+// ("v0.29.3") / ghcr ("0.29.3") spelling split that blanked the GHCR panels.
+func TestReleaseLineFilter(t *testing.T) {
+	t.Parallel()
+	d := openTest(t)
+	ctx := context.Background()
+
+	gh := func(rel, arch string, n int64) Observation {
+		return Observation{Source: "github_release", Repo: "r", Release: rel, Asset: rel + arch, OS: "linux", Arch: arch, Format: "deb", Count: n}
+	}
+	ghcr := func(rel, arch string, n int64) Observation {
+		return Observation{Source: "ghcr", Repo: "r", Release: rel, Asset: "sha256:" + rel + arch, OS: "linux", Arch: arch, Count: n}
+	}
+	require.NoError(t, must(d.Save(ctx, 100, []Observation{
+		gh("v0.29.0", "amd64", 10), gh("v0.29.0-beta.4", "amd64", 3), gh("v0.29.1", "amd64", 20),
+		gh("v0.2.9", "amd64", 99), gh("v0.30.0", "amd64", 7), gh("v0.290.1", "amd64", 5),
+		ghcr("0.29.0", "amd64", 40), ghcr("0.29.1", "arm64", 50), ghcr("untagged", "amd64", 900),
+	})))
+
+	labels := func(f Filter, by string) []string {
+		pts, err := d.TimeSeries(ctx, f, by, 0, 1000)
+		require.NoError(t, err)
+		set := map[string]struct{}{}
+		for _, p := range pts {
+			set[p.Label] = struct{}{}
+		}
+		return slices.Sorted(maps.Keys(set))
+	}
+
+	// 1. A line filter yields SEPARATE lines, one per release - not a merged
+	//    "v0.29", and not the neighbouring v0.2.9 / v0.30.0 / v0.290.1.
+	require.Equal(t, []string{"v0.29.0", "v0.29.0-beta.4", "v0.29.1"},
+		labels(Filter{Source: "github_release", Repo: "r", Release: "v0.29"}, "release"))
+
+	// 2. An exact filter still means exactly one release - a prerelease is a
+	//    different release, not a member of v0.29.0.
+	require.Equal(t, []string{"v0.29.0"},
+		labels(Filter{Source: "github_release", Repo: "r", Release: "v0.29.0"}, "release"))
+
+	// 3. GHCR: the v-prefixed dropdown value matches the stripped stored one -
+	//    this is the blank "Pulls by arch" panel.
+	require.Equal(t, []string{"arm64"},
+		labels(Filter{Source: "ghcr", Repo: "r", Release: "v0.29.1"}, "arch"))
+	require.Equal(t, []string{"0.29.0", "0.29.1"},
+		labels(Filter{Source: "ghcr", Repo: "r", Release: "v0.29"}, "release"))
+
+	// 4. The line is a version boundary, not a string prefix: v0.2 selects its
+	//    own line and nothing from v0.29.
+	require.Equal(t, []string{"v0.2.9"},
+		labels(Filter{Source: "github_release", Repo: "r", Release: "v0.2"}, "release"))
+
+	// 5. A bare "v" is a wildcard, not a selector for the non-version bucket.
+	require.Contains(t, labels(Filter{Source: "ghcr", Repo: "r", Release: "v"}, "release"), "untagged")
+
+	// 6. The dropdown offers the line next to the exact versions.
+	vals, err := d.Values(ctx, Filter{Source: "github_release", Repo: "r"}, "release")
+	require.NoError(t, err)
+	require.Subset(t, vals, []string{"v0.29", "v0.29.1", "v0.29.0-beta.4"})
+	require.NotContains(t, vals, "0.29", "lines keep the source's spelling")
 }
