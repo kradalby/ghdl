@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/juanfont/headscale/hscontrol/db/sqliteconfig"
 	"github.com/tailscale/squibble"
@@ -99,6 +100,10 @@ func (d *DB) Save(ctx context.Context, ts int64, obs []Observation) (int, error)
 	written := 0
 
 	for _, o := range obs {
+		if err := relabel(ctx, q, o); err != nil {
+			return 0, err
+		}
+
 		id, err := q.UpsertSeries(ctx, dbsqlc.UpsertSeriesParams{
 			Source:  o.Source,
 			Repo:    o.Repo,
@@ -137,6 +142,50 @@ func (d *DB) Save(ctx context.Context, ts int64, obs []Observation) (int, error)
 	}
 
 	return written, nil
+}
+
+// relabel points the series recording o's artifact at o's current release,
+// for artifacts named by a content digest (GHCR sub-manifests). The digest
+// identifies the image on its own, so a label the collector once got wrong —
+// every prerelease container was filed as "untagged" until the tag parser
+// learned to read them — is corrected in place, carrying the artifact's whole
+// history with it. UpsertSeries deliberately never rewrites a series' columns,
+// so without this a relabel mints a second series beside a frozen original that
+// keeps contributing its last value to every sum.
+//
+// The oldest row wins; a newer duplicate can only come from a rollback to a
+// binary with the old labels, and dropping it loses nothing, because both rows
+// track the same cumulative counter.
+//
+// ponytail: one indexed lookup per digest-keyed observation, on every scrape.
+// Fold it into UpsertSeries if GHCR ever grows enough artifacts to notice.
+func relabel(ctx context.Context, q *dbsqlc.Queries, o Observation) error {
+	if !strings.HasPrefix(o.Asset, "sha256:") {
+		return nil
+	}
+
+	rows, err := q.SeriesByAsset(ctx, dbsqlc.SeriesByAssetParams{Source: o.Source, Repo: o.Repo, Asset: o.Asset})
+	if err != nil {
+		return fmt.Errorf("series by asset: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	for _, dup := range rows[1:] {
+		if err := q.DeleteSeriesObservations(ctx, dup.ID); err != nil {
+			return fmt.Errorf("delete duplicate observations: %w", err)
+		}
+		if err := q.DeleteSeries(ctx, dup.ID); err != nil {
+			return fmt.Errorf("delete duplicate series: %w", err)
+		}
+	}
+
+	if rows[0].Release == o.Release {
+		return nil
+	}
+
+	return q.SetSeriesRelease(ctx, dbsqlc.SetSeriesReleaseParams{Release: o.Release, ID: rows[0].ID})
 }
 
 // Series lists series matching the optional source/repo filters ("" matches

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -209,4 +210,56 @@ func TestTimeSeriesLongFormat(t *testing.T) {
 	for _, p := range total {
 		require.Equal(t, "total", p.Label)
 	}
+}
+
+// TestRelabelKeepsHistory is the reason the tag parser can be fixed at all: a
+// GHCR artifact is identified by its digest, so correcting its release label
+// must move the existing series rather than mint a second one. A second series
+// would leave the original frozen but still carrying its last value into every
+// sum, permanently double-counting that artifact.
+func TestRelabelKeepsHistory(t *testing.T) {
+	t.Parallel()
+	d := openTest(t)
+	ctx := context.Background()
+
+	digest := "sha256:" + strings.Repeat("a", 64)
+	obs := func(release string, count int64) []Observation {
+		return []Observation{{Source: "ghcr", Repo: "r", Release: release, Asset: digest, OS: "linux", Arch: "amd64", Count: count}}
+	}
+
+	// Two scrapes by the old parser, which could not read prerelease tags.
+	require.NoError(t, must(d.Save(ctx, 100, obs("untagged", 10))))
+	require.NoError(t, must(d.Save(ctx, 200, obs("untagged", 20))))
+	// The parser learns to read them; the same digest reports its real tag.
+	require.NoError(t, must(d.Save(ctx, 300, obs("0.29.0-beta.4", 30))))
+
+	series, err := d.Series(ctx, "ghcr", "r")
+	require.NoError(t, err)
+	require.Len(t, series, 1, "the series moved, it was not duplicated")
+	require.Equal(t, "0.29.0-beta.4", series[0].Release)
+
+	// The old observations came along, so the line has no step and no gap.
+	pts, err := d.TimeSeries(ctx, Filter{Source: "ghcr", Repo: "r"}, "release", 0, 300)
+	require.NoError(t, err)
+	got := map[int64]int64{}
+	for _, p := range pts {
+		require.Equal(t, "0.29.0-beta.4", p.Label)
+		got[p.Ts] = p.Count
+	}
+	require.Equal(t, map[int64]int64{100: 10, 200: 20, 300: 30}, got)
+
+	// A rollback re-creates the old label beside the new one; rolling forward
+	// must collapse them, not sum them.
+	_, err = d.sql.ExecContext(ctx,
+		`INSERT INTO series (source, repo, release, asset, os, arch, format) VALUES ('ghcr','r','untagged',?,'linux','amd64','')`, digest)
+	require.NoError(t, err)
+	require.NoError(t, must(d.Save(ctx, 400, obs("0.29.0-beta.4", 40))))
+
+	series, err = d.Series(ctx, "ghcr", "r")
+	require.NoError(t, err)
+	require.Len(t, series, 1, "the rollback duplicate was dropped, not left to double-count")
+
+	pts, err = d.TimeSeries(ctx, Filter{Source: "ghcr", Repo: "r"}, "arch", 0, 400)
+	require.NoError(t, err)
+	require.Equal(t, int64(40), pts[len(pts)-1].Count, "40, not 80")
 }
