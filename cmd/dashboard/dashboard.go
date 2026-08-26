@@ -163,7 +163,7 @@ func valuesVar(name, label, field, source, repo string) *dashboard.QueryVariable
 			},
 		}}).
 		Refresh(dashboard.VariableRefreshOnDashboardLoad).
-		Sort(dashboard.VariableSortAlphabeticalDesc).
+		Sort(dashboard.VariableSortNaturalDesc).
 		IncludeAll(true).AllValue(allValue).Multi(false)
 }
 
@@ -184,7 +184,7 @@ func buildDataDashboard() (dashboard.Dashboard, error) {
 		Timezone(common.TimeZoneBrowser).
 		WithVariable(dashboard.NewDatasourceVariableBuilder(infinityVar).
 			Label("ghdl API").Type("yesoreyeram-infinity-datasource")).
-		WithVariable(valuesVar("version", "Version (release/tag)", "release", "github_release", ghRepo)).
+		WithVariable(valuesVar("version", "Version (v0.29 = the whole minor line)", "release", "github_release", ghRepo)).
 		WithVariable(valuesVar("arch", "Arch", "arch", "github_release", ghRepo)).
 		WithVariable(valuesVar("format", "Packaging", "format", "github_release", ghRepo)).
 
@@ -198,8 +198,8 @@ func buildDataDashboard() (dashboard.Dashboard, error) {
 			"Split by packaging (deb/rpm/tar.gz/zip/bin), filtered by the pinned Version and Arch.",
 			"github_release", ghRepo, "format", filters{release: v, arch: a})).
 		WithPanel(infinityTimeseries("Downloads by version",
-			"Split by release version, filtered by the pinned Arch and Packaging.",
-			"github_release", ghRepo, "release", filters{arch: a, format: fmtV})).
+			"Split by release version, filtered by the pinned Version, Arch and Packaging. Pin a minor line (v0.29) to compare that rollout's releases against each other.",
+			"github_release", ghRepo, "release", filters{release: v, arch: a, format: fmtV})).
 		WithPanel(infinityTimeseries("Downloads by OS",
 			"Split by operating system, filtered by the pinned Version.",
 			"github_release", ghRepo, "os", filters{release: v})).
@@ -208,10 +208,15 @@ func buildDataDashboard() (dashboard.Dashboard, error) {
 		WithRow(dashboard.NewRowBuilder("GHCR containers")).
 		WithPanel(infinityTimeseries("Pulls by arch",
 			"Per-arch container pulls (sub-manifest downloads), filtered by the pinned Version.",
-			"ghcr", ghRepo, "arch", filters{release: v})).
+			// ponytail: os=linux is how "only the per-arch rows" is spelled —
+			// Filter cannot say "arch is not empty", and the registry index
+			// gives every per-arch row an os. It drops the repo-wide total,
+			// which otherwise dwarfs the real lines. Revisit if a non-linux
+			// image ships.
+			"ghcr", ghRepo, "arch", filters{release: v, os: "linux"})).
 		WithPanel(infinityTimeseries("Pulls by version",
-			"Per-version container pulls, filtered by the pinned Arch.",
-			"ghcr", ghRepo, "release", filters{arch: a})).
+			"Per-version container pulls, filtered by the pinned Version and Arch. Container tags carry no leading v, and a prerelease image only appears from the first scrape that recognised its tag.",
+			"ghcr", ghRepo, "release", filters{release: v, arch: a})).
 
 		// Docker Hub — repo total only (the API exposes nothing finer).
 		WithRow(dashboard.NewRowBuilder("Docker Hub (repo total only)")).
