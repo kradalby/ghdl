@@ -29,9 +29,11 @@ func TestDashboardsBuild(t *testing.T) {
 	}
 }
 
-// TestVariablesUseInfinityEnvelope pins what silently emptied the dropdowns:
-// Infinity reads a {queryType:"infinity", infinityQuery:{…}} envelope and
-// treats anything else as a legacy string query, which returns nothing.
+// TestVariablesUseInfinityEnvelope pins the two things that silently emptied
+// the dropdowns: Infinity reads a {queryType:"infinity", infinityQuery:{…}}
+// envelope and treats anything else as a legacy string query returning
+// nothing; and a blank custom all-value makes Grafana expand All into a list
+// of every option instead of the "*" the API reads as "no filter".
 func TestVariablesUseInfinityEnvelope(t *testing.T) {
 	t.Parallel()
 
@@ -44,6 +46,9 @@ func TestVariablesUseInfinityEnvelope(t *testing.T) {
 			continue
 		}
 		queries++
+		require.NotNil(t, v.AllValue)
+		require.Equal(t, "*", *v.AllValue, v.Name)
+
 		require.NotNil(t, v.Query, v.Name)
 		q := v.Query.Map
 		require.Equal(t, "infinity", q["queryType"], v.Name)

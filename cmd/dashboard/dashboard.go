@@ -29,6 +29,11 @@ const (
 
 	ghRepo     = "juanfont/headscale"  // GitHub releases + GHCR
 	dockerRepo = "headscale/headscale" // Docker Hub
+
+	// allValue is what a variable's All option sends. It must be an explicit
+	// literal the API understands as "no filter": blank makes Grafana expand
+	// All into a "{a,b,c}" list of every option, which matches no series.
+	allValue = "*"
 )
 
 // legend configures a panel legend. Per the project convention, every panel
@@ -159,7 +164,7 @@ func valuesVar(name, label, field, source, repo string) *dashboard.QueryVariable
 		}}).
 		Refresh(dashboard.VariableRefreshOnDashboardLoad).
 		Sort(dashboard.VariableSortAlphabeticalDesc).
-		IncludeAll(true).AllValue("").Multi(false)
+		IncludeAll(true).AllValue(allValue).Multi(false)
 }
 
 // buildDataDashboard assembles the downloads-over-time dashboard with drill-down
