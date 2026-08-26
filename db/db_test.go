@@ -153,3 +153,60 @@ CREATE TABLE _litestream_lock (id INTEGER);`)
 }
 
 func must(_ int, err error) error { return err }
+
+// TestTimeSeriesLongFormat guards the shape Grafana needs, not just the sums.
+// Infinity turns the long {ts,label,count} table into one line per label with
+// data.LongToWide, which refuses a frame whose time column is not sorted
+// ascending; a label-major result silently renders as one sawtoothing "count"
+// line. Labels must also be non-empty, or the line has no name in the legend.
+func TestTimeSeriesLongFormat(t *testing.T) {
+	t.Parallel()
+	d := openTest(t)
+	ctx := context.Background()
+
+	mk := func(rel, arch string, count int64) Observation {
+		return Observation{Source: "github_release", Repo: "r", Release: rel, Asset: rel + arch, OS: "linux", Arch: arch, Format: "deb", Count: count}
+	}
+	// checksums.txt has no arch — it must still get a named line.
+	sums := Observation{Source: "github_release", Repo: "r", Release: "1", Asset: "checksums.txt", Count: 7}
+
+	require.NoError(t, must(d.Save(ctx, 100, []Observation{mk("1", "amd64", 10), mk("1", "arm64", 5), sums})))
+	require.NoError(t, must(d.Save(ctx, 200, []Observation{mk("1", "amd64", 20), mk("1", "arm64", 5), sums})))
+	// A new release appears late; the old lines must still have points here.
+	require.NoError(t, must(d.Save(ctx, 300, []Observation{mk("2", "amd64", 3)})))
+
+	pts, err := d.TimeSeries(ctx, Filter{Source: "github_release", Repo: "r"}, "arch", 0, 400)
+	require.NoError(t, err)
+	require.NotEmpty(t, pts)
+
+	labels := map[string]int{}
+	for i, p := range pts {
+		require.NotEmpty(t, p.Label, "every line needs a name")
+		if i > 0 {
+			require.GreaterOrEqual(t, p.Ts, pts[i-1].Ts, "points must be ordered by time, not grouped by label")
+		}
+		labels[p.Label]++
+	}
+
+	// Dense: every label has a point at every timestamp (100, 200, 300 and the
+	// window end 400), so no line is a lone unconnected point.
+	require.Equal(t, map[string]int{"amd64": 4, "arm64": 4, "unknown": 4}, labels)
+
+	// The window end repeats the last known value rather than inventing one.
+	last := map[string]int64{}
+	for _, p := range pts {
+		if p.Ts == 400 {
+			last[p.Label] = p.Count
+		}
+	}
+	require.Equal(t, int64(23), last["amd64"], "20 from release 1 + 3 from release 2")
+	require.Equal(t, int64(5), last["arm64"])
+	require.Equal(t, int64(7), last["unknown"])
+
+	// An unrecognised `by` collapses everything onto one named line.
+	total, err := d.TimeSeries(ctx, Filter{Source: "github_release", Repo: "r"}, "none", 0, 400)
+	require.NoError(t, err)
+	for _, p := range total {
+		require.Equal(t, "total", p.Label)
+	}
+}
