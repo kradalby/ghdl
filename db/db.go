@@ -169,6 +169,12 @@ func (f Filter) matches(s dbsqlc.Series) bool {
 // os/arch/format/release/asset; anything else means a single combined line).
 // Because counts are stored on-change, values are carried forward: each output
 // point sums every member series' last-known value at that timestamp.
+//
+// The result is a dense long-format table — every label gets a point at every
+// timestamp, ordered by timestamp then label. Grafana's Infinity datasource
+// only splits a long frame into one line per label via data.LongToWide, which
+// refuses a frame whose time column is not sorted ascending; a label-major or
+// ragged result silently stays one flat "count" line that saws up and down.
 func (d *DB) TimeSeries(ctx context.Context, f Filter, by string, from, to int64) ([]Point, error) {
 	series, err := d.Series(ctx, f.Source, f.Repo)
 	if err != nil {
@@ -178,6 +184,7 @@ func (d *DB) TimeSeries(ctx context.Context, f Filter, by string, from, to int64
 	// group label -> series ids; and per-series points within the window.
 	groups := map[string][]int64{}
 	pointsFor := map[int64][]Point{} // ts,count per series (Label unused here)
+	tsSet := map[int64]struct{}{}
 
 	for _, s := range series {
 		if !f.matches(s) {
@@ -190,16 +197,43 @@ func (d *DB) TimeSeries(ctx context.Context, f Filter, by string, from, to int64
 		if len(pts) == 0 {
 			continue // no data in or before the window
 		}
-		label := groupLabel(s, by)
-		groups[label] = append(groups[label], s.ID)
+		groups[groupLabel(s, by)] = append(groups[groupLabel(s, by)], s.ID)
 		pointsFor[s.ID] = pts
+		for _, p := range pts {
+			tsSet[p.Ts] = struct{}{}
+		}
+	}
+	if len(tsSet) == 0 {
+		return nil, nil
 	}
 
+	timestamps := slices.Sorted(maps.Keys(tsSet))
+	// Carry every line to the end of the window, so a release that stopped
+	// changing still draws a full-width step instead of a single point.
+	if last := timestamps[len(timestamps)-1]; last < to {
+		timestamps = append(timestamps, to)
+	}
 	labels := slices.Sorted(maps.Keys(groups))
 
-	var out []Point
-	for _, label := range labels {
-		out = append(out, aggregate(label, groups[label], pointsFor)...)
+	// Per-series cursor into pointsFor, advanced as the shared timeline moves;
+	// cur holds each series' carried-forward value (0 before its first point).
+	idx := make(map[int64]int, len(pointsFor))
+	cur := make(map[int64]int64, len(pointsFor))
+
+	out := make([]Point, 0, len(timestamps)*len(labels))
+	for _, ts := range timestamps {
+		for _, label := range labels {
+			var sum int64
+			for _, id := range groups[label] {
+				pts := pointsFor[id]
+				for idx[id] < len(pts) && pts[idx[id]].Ts <= ts {
+					cur[id] = pts[idx[id]].Count
+					idx[id]++
+				}
+				sum += cur[id]
+			}
+			out = append(out, Point{Ts: ts, Label: label, Count: sum})
+		}
 	}
 
 	return out, nil
@@ -231,68 +265,43 @@ func (d *DB) windowPoints(ctx context.Context, id, from, to int64) ([]Point, err
 	return pts, nil
 }
 
-// aggregate sums the member series' carried-forward values at every timestamp
-// any of them changes, producing one labelled step line.
-func aggregate(label string, ids []int64, pointsFor map[int64][]Point) []Point {
-	tsSet := map[int64]struct{}{}
-	for _, id := range ids {
-		for _, p := range pointsFor[id] {
-			tsSet[p.Ts] = struct{}{}
-		}
-	}
-	tsList := make([]int64, 0, len(tsSet))
-	for ts := range tsSet {
-		tsList = append(tsList, ts)
-	}
-	slices.Sort(tsList)
-
-	idx := make(map[int64]int, len(ids))
-	cur := make(map[int64]int64, len(ids))
-
-	out := make([]Point, 0, len(tsList))
-	for _, ts := range tsList {
-		var sum int64
-		for _, id := range ids {
-			pts := pointsFor[id]
-			for idx[id] < len(pts) && pts[idx[id]].Ts <= ts {
-				cur[id] = pts[idx[id]].Count
-				idx[id]++
-			}
-			sum += cur[id] // 0 until the series' first point
-		}
-		out = append(out, Point{Ts: ts, Label: label, Count: sum})
-	}
-
-	return out
-}
-
-// groupLabel picks the label field for a series under the given grouping.
-func groupLabel(s dbsqlc.Series, by string) string {
-	switch by {
+// dimension reads one of a series' dimension columns; an unknown field yields
+// "".
+func dimension(s dbsqlc.Series, field string) string {
+	switch field {
+	case "source":
+		return s.Source
+	case "repo":
+		return s.Repo
+	case "release":
+		return s.Release
+	case "asset":
+		return s.Asset
 	case "os":
 		return s.Os
 	case "arch":
 		return s.Arch
 	case "format":
 		return s.Format
-	case "release":
-		return s.Release
-	case "asset":
-		return s.Asset
 	default:
-		return "" // single combined line
+		return ""
 	}
 }
 
-// fieldValue extends groupLabel with the source/repo dimensions, for Values.
-func fieldValue(s dbsqlc.Series, field string) string {
-	switch field {
-	case "source":
-		return s.Source
-	case "repo":
-		return s.Repo
+// groupLabel names the step line a series belongs to under the given grouping.
+// Every line gets a non-empty name: a series with no value for the dimension
+// (a checksums file has no arch) lands on "unknown", and a `by` that is not a
+// dimension puts everything on one "total" line. An empty name would reach
+// Grafana as an unnamed series and render as a bare "count" in the legend.
+func groupLabel(s dbsqlc.Series, by string) string {
+	switch by {
+	case "source", "repo", "release", "asset", "os", "arch", "format":
+		if v := dimension(s, by); v != "" {
+			return v
+		}
+		return "unknown"
 	default:
-		return groupLabel(s, field)
+		return "total"
 	}
 }
 
@@ -310,7 +319,7 @@ func (d *DB) Values(ctx context.Context, f Filter, field string) ([]string, erro
 		if !f.matches(s) {
 			continue
 		}
-		if v := fieldValue(s, field); v != "" {
+		if v := dimension(s, field); v != "" {
 			set[v] = struct{}{}
 		}
 	}
