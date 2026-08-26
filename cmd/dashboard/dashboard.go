@@ -133,21 +133,29 @@ func infinityTimeseries(title, desc, source, repo, by string, f filters) *timese
 
 // valuesVar builds an "All"-able template variable populated from /api/values,
 // so the viewer can pin a dimension and the panels filter by it.
+//
+// Infinity's variable support reads a {queryType, infinityQuery} envelope, not
+// a bare query: given an object with no queryType it falls back to its legacy
+// string-query provider, which returns nothing and leaves the dropdown empty.
 func valuesVar(name, label, field, source, repo string) *dashboard.QueryVariableBuilder {
 	return dashboard.NewQueryVariableBuilder(name).
 		Label(label).
 		Datasource(infinityDS()).
 		Query(dashboard.StringOrMap{Map: map[string]any{
-			"refId":         "variable",
-			"datasource":    map[string]any{"type": "yesoreyeram-infinity-datasource", "uid": "${" + infinityVar + "}"},
-			"type":          "json",
-			"source":        "url",
-			"parser":        "backend", // required, or the dropdown stays empty
-			"format":        "table",
-			"url":           "/api/values?field=" + field + "&source=" + source + "&repo=" + repo,
-			"url_options":   map[string]any{"method": "GET"},
-			"root_selector": "",
-			"columns":       []map[string]any{{"selector": "value", "text": "value", "type": "string"}},
+			"refId":     "variable",
+			"queryType": "infinity",
+			"infinityQuery": map[string]any{
+				"refId":         "variable",
+				"datasource":    map[string]any{"type": "yesoreyeram-infinity-datasource", "uid": "${" + infinityVar + "}"},
+				"type":          "json",
+				"source":        "url",
+				"parser":        "backend", // required, or the dropdown stays empty
+				"format":        "table",
+				"url":           "/api/values?field=" + field + "&source=" + source + "&repo=" + repo,
+				"url_options":   map[string]any{"method": "GET"},
+				"root_selector": "",
+				"columns":       []map[string]any{{"selector": "value", "text": "value", "type": "string"}},
+			},
 		}}).
 		Refresh(dashboard.VariableRefreshOnDashboardLoad).
 		Sort(dashboard.VariableSortAlphabeticalDesc).
