@@ -49,3 +49,23 @@ WHERE series_id = sqlc.arg(series_id)
   AND ts > sqlc.arg(from_ts)
   AND ts <= sqlc.arg(to_ts)
 ORDER BY ts;
+
+-- name: SeriesByAsset :many
+-- Every series recording one artifact within a source+repo, oldest first. Where
+-- the asset is a content digest this identifies the artifact on its own, so a
+-- second row means its release label changed and the old row was left behind.
+SELECT id, release
+FROM series
+WHERE source = sqlc.arg(source)
+  AND repo = sqlc.arg(repo)
+  AND asset = sqlc.arg(asset)
+ORDER BY id;
+
+-- name: SetSeriesRelease :exec
+UPDATE series SET release = sqlc.arg(release) WHERE id = sqlc.arg(id);
+
+-- name: DeleteSeriesObservations :exec
+DELETE FROM observations WHERE series_id = ?;
+
+-- name: DeleteSeries :exec
+DELETE FROM series WHERE id = ?;
