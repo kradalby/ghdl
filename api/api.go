@@ -60,13 +60,23 @@ func (s *Server) Series(w http.ResponseWriter, r *http.Request) {
 // dimension matches everything, so panels can pin some (e.g. release, format)
 // and split by another (arch).
 func filterFrom(q interface{ Get(key string) string }) db.Filter {
+	// "*" is the dashboard variables' All value. Grafana only substitutes a
+	// literal for All when the variable sets a custom all-value; left blank it
+	// expands to a "{a,b,c}" list of every option, which would match nothing.
+	get := func(key string) string {
+		if v := q.Get(key); v != "*" {
+			return v
+		}
+		return ""
+	}
+
 	return db.Filter{
-		Source:  q.Get("source"),
-		Repo:    q.Get("repo"),
-		Release: q.Get("release"),
-		OS:      q.Get("os"),
-		Arch:    q.Get("arch"),
-		Format:  q.Get("format"),
+		Source:  get("source"),
+		Repo:    get("repo"),
+		Release: get("release"),
+		OS:      get("os"),
+		Arch:    get("arch"),
+		Format:  get("format"),
 	}
 }
 
