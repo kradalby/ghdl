@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/cenkalti/backoff/v5"
+	"github.com/cenkalti/backoff/v7"
 
 	"github.com/kradalby/ghdl/db"
 )
@@ -114,7 +114,7 @@ func retryAfter(resp *http.Response, url string) error {
 		d = max(time.Until(t), 0)
 	}
 
-	return fmt.Errorf("%w (%w)", err, &backoff.RetryAfterError{Duration: d})
+	return backoff.RetryAfter(d, err)
 }
 
 // classify maps a response status onto the retry policy shared by getJSON and
