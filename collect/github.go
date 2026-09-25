@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/go-github/v75/github"
+	"github.com/google/go-github/v92/github"
 
 	"github.com/kradalby/ghdl/db"
 	"github.com/kradalby/ghdl/parse"
@@ -20,12 +20,16 @@ type GitHub struct {
 
 // NewGitHub builds a GitHub collector. An empty token works but is subject to
 // the low unauthenticated rate limit; a token raises it to 5000 req/hr.
-func NewGitHub(token string, repos []string) *GitHub {
-	c := github.NewClient(newHTTPClient())
+func NewGitHub(token string, repos []string) (*GitHub, error) {
+	opts := []github.ClientOptionsFunc{github.WithHTTPClient(newHTTPClient())}
 	if token != "" {
-		c = c.WithAuthToken(token)
+		opts = append(opts, github.WithAuthToken(token))
 	}
-	return &GitHub{client: c, repos: repos}
+	c, err := github.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("github client: %w", err)
+	}
+	return &GitHub{client: c, repos: repos}, nil
 }
 
 // Source implements Collector.

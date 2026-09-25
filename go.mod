@@ -6,7 +6,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/google/go-cmp v0.7.0
-	github.com/google/go-github/v75 v75.0.0
+	github.com/google/go-github/v92 v92.0.0
 	github.com/grafana/grafana-foundation-sdk/go v0.0.20
 	github.com/juanfont/headscale v0.29.4
 	github.com/kradalby/kra v0.0.0-20260925084146-404be82c1776
