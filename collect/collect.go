@@ -132,6 +132,33 @@ func classify(resp *http.Response, url string) error {
 	}
 }
 
+// maxTries bounds the attempts getJSON and getHTML make at one request.
+const maxTries = 8
+
+// retry runs op under the retry policy shared by getJSON and getHTML.
+//
+// runAll wraps every Collect in a Retry of its own. When this one gives up,
+// backoff reports only the cause of a RetryAfterError, not the error itself,
+// so the server's delay is attached again here. Without it the outer Retry
+// falls back to exponential backoff and hits the server before Retry-After.
+func retry[T any](ctx context.Context, op backoff.Operation[T]) (T, error) {
+	var wait *backoff.RetryAfterError
+
+	res, err := backoff.Retry(ctx, func() (T, error) {
+		res, err := op()
+
+		wait = nil
+		errors.As(err, &wait)
+
+		return res, err
+	}, backoff.WithBackOff(backoff.NewExponentialBackOff()), backoff.WithMaxTries(maxTries))
+	if err != nil && wait != nil {
+		return res, backoff.RetryAfter(wait.Duration, err)
+	}
+
+	return res, err
+}
+
 func newRequest(ctx context.Context, url string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -145,7 +172,7 @@ func newRequest(ctx context.Context, url string) (*http.Request, error) {
 // Docker Hub's repository API and ghcr.io's token endpoint are both rate
 // limited, so this needs the same retry policy as the HTML scrape.
 func getJSON(ctx context.Context, hc *http.Client, url string, v any) error {
-	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+	_, err := retry(ctx, func() (struct{}, error) {
 		req, err := newRequest(ctx, url)
 		if err != nil {
 			return struct{}{}, backoff.Permanent(err)
@@ -163,7 +190,7 @@ func getJSON(ctx context.Context, hc *http.Client, url string, v any) error {
 		}
 
 		return struct{}{}, json.NewDecoder(resp.Body).Decode(v)
-	}, backoff.WithBackOff(backoff.NewExponentialBackOff()), backoff.WithMaxTries(8))
+	})
 
 	return err
 }
@@ -173,7 +200,7 @@ func getJSON(ctx context.Context, hc *http.Client, url string, v any) error {
 // number of requests, so a single blip must not fail the whole collection. 5xx,
 // rate limits and network errors are retried; other 4xx are permanent.
 func getHTML(ctx context.Context, hc *http.Client, url string) (*goquery.Document, error) {
-	return backoff.Retry(ctx, func() (*goquery.Document, error) {
+	return retry(ctx, func() (*goquery.Document, error) {
 		req, err := newRequest(ctx, url)
 		if err != nil {
 			return nil, backoff.Permanent(err)
@@ -190,7 +217,7 @@ func getHTML(ctx context.Context, hc *http.Client, url string) (*goquery.Documen
 		}
 
 		return goquery.NewDocumentFromReader(resp.Body)
-	}, backoff.WithBackOff(backoff.NewExponentialBackOff()), backoff.WithMaxTries(8))
+	})
 }
 
 // docFromReader is a small seam so the HTML parsers can be unit-tested against
