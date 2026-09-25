@@ -115,7 +115,10 @@ func serve(ctx context.Context, log *slog.Logger, cfg *config) error {
 	}
 	defer store.Close()
 
-	gh := collect.NewGitHub(os.Getenv("GHDL_GITHUB_TOKEN"), splitList(*cfg.githubRepos))
+	gh, err := collect.NewGitHub(os.Getenv("GHDL_GITHUB_TOKEN"), splitList(*cfg.githubRepos))
+	if err != nil {
+		return fmt.Errorf("build github collector: %w", err)
+	}
 	collectors := []collect.Collector{
 		gh,
 		collect.NewDockerHub(splitList(*cfg.dockerhubRepos)),
