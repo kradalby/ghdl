@@ -9,7 +9,7 @@ require (
 	github.com/google/go-github/v92 v92.0.0
 	github.com/grafana/grafana-foundation-sdk/go v0.0.20
 	github.com/juanfont/headscale v0.29.4
-	github.com/kradalby/kra v0.0.0-20260925084146-404be82c1776
+	github.com/kradalby/kra v0.0.0-20260930190439-99c91a9be880
 	github.com/peterbourgon/ff/v4 v4.0.0-beta.1
 	github.com/prometheus/client_golang v1.24.1
 	github.com/stretchr/testify v1.12.1
